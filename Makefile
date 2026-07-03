@@ -19,12 +19,12 @@ confirm:
 # INFRASTRUCTURE — multi-service orchestration
 # =================================================================
 
-## infra/start : start postgres + redis and wait until both are healthy
+## infra/start : start the database containers and wait until they are ready
 .PHONY: infra/start
 infra/start:
 	docker compose up -d
 	@echo "Waiting for Postgres..."
-	@until docker compose exec db pg_isready -U agentgate > /dev/null 2>&1; do sleep 0.5; done
+	@until docker compose exec postgres pg_isready -U agentgate > /dev/null 2>&1; do sleep 0.5; done
 	@echo "Waiting for Redis..."
 	@until docker compose exec redis redis-cli ping > /dev/null 2>&1; do sleep 0.5; done
 	@echo "Stack ready."

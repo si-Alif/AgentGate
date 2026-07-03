@@ -35,6 +35,17 @@ const envSchema = z.object({
   // AGENTGATE_AUDIT_RETENTION_DAYS: z.coerce.number().default(90),
 });
 
+
+/**
+#### workflow :
+  1. dotenv library lokks for .env file in the root directory of the project and loads the environment variables from it into `process.env`.
+    - `process.env` is just a giant object containing every environment variable on your system. dotenv simply adds your file's variables to that object.
+  2. now that process.env contains all the variables from your .env file, we can use zod to validate them.
+    - zod ignores all the variables that are not defined in the schema from `process.env` and only looks for the ones you have defined in your schema , loads them and then does the validation checks written against them
+    - coercion : convert string into a number and validate
+    - default : if var is missing in env , use the default value provided in the schema
+  3. The result of `.parse()` is a plain JavaScript object that is fully typed. When you import env in server.ts, you aren't talking to the .env file anymore; you are talking to a validated, typed object in memory.
+**/
 export const env = envSchema.parse(process.env);
 
 export type Env = z.infer<typeof envSchema>;

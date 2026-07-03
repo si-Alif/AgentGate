@@ -1,33 +1,35 @@
+version: "3.8"
 services:
-  db:
+  postgres:
     image: postgres:16-alpine
+    container_name: agentgate-postgres
     environment:
-      POSTGRES_USER: agentgate
-      POSTGRES_PASSWORD: pa55word
       POSTGRES_DB: agentgate
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agentgate"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
+    container_name: agentgate-redis
     ports:
       - "6379:6379"
     volumes:
-      - redisdata:/data
-    command: redis-server --appendonly yes
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 5
 
 volumes:
-  pgdata:
-  redisdata:
+  postgres_data:
+  redis_data:
