@@ -1,4 +1,4 @@
-import  type {FastifyInstance}  from 'fastify'
+import type { FastifyInstance } from 'fastify'
 import { authService } from '../../services/auth.service.js'
 
 interface RegisterTenantInput {
@@ -28,7 +28,14 @@ export async function registerRoutes(app: FastifyInstance) {
           201: {
             type: 'object',
             properties: {
-              tenant: { type: 'object' },
+              tenant: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  slug: { type: 'string' },
+                },
+              },
               user: {
                 type: 'object',
                 properties: {
