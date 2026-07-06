@@ -1,6 +1,13 @@
 import  type {FastifyInstance}  from 'fastify'
 import { authService } from '../../services/auth.service.js'
 
+interface RegisterTenantInput {
+  tenantName: string
+  slug: string
+  ownerEmail: string
+  password: string
+}
+
 export async function registerRoutes(app: FastifyInstance) {
   // POST /auth/register-tenant
   app.post(
@@ -38,7 +45,7 @@ export async function registerRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       try {
-        const result = await authService.registerTenant(request.body as any)
+        const result = await authService.registerTenant(request.body as RegisterTenantInput)
         return reply.status(201).send(result)
       } catch (err: any) {
         if (err.message === 'SLUG_TAKEN') {

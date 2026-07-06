@@ -8,11 +8,11 @@ export const authService = {
   async registerTenant(data :{
     tenantName : string
     slug : string
-    email : string
+    ownerEmail : string
     password : string
   }){
     const existingUser = await tenantRepository.findBySlug(data.slug);
-    if (existingUser) throw new Error("Tenant with this slug already exists");
+    if (existingUser) throw new Error("SLUG_TAKEN");
 
     const hashedPassword = await argon2.hash(data.password);
 
@@ -26,7 +26,7 @@ export const authService = {
 
       const user = await userRepository.create({
         tenantId : tenant.id,
-        email : data.email,
+        email : data.ownerEmail,
         passwordHash : hashedPassword,
         role : "owner",
         verificationToken : verificationToken,
@@ -37,7 +37,7 @@ export const authService = {
 
     emailQueue.add("verification" , {
       type : "verification",
-      email : data.email,
+      email : data.ownerEmail,
       token : verificationToken,
     }).catch((err) => {
       console.error("[EMAIL QUEUE] Failed to enqueue:", err);
@@ -47,7 +47,7 @@ export const authService = {
       tenant : res.tenant,
       user : {
         id : res.user.id,
-        email : res.user.id,
+        email : res.user.email,
         role : res.user.role
       }
     }
@@ -57,7 +57,7 @@ export const authService = {
 
   async verifyEmail(token : string){
     const user = await userRepository.findByVerificationToken(token);
-    if (!user) throw new Error("Invalid verification token");
+    if (!user) throw new Error("INVALID_TOKEN");
     await userRepository.updateVerified(user.id);
     return {
       verified : true,
