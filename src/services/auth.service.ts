@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import {tenantRepository} from "../repositories/tenant.repository.js";
 import {userRepository} from "../repositories/user.repository.js";
 import {emailQueue} from "../queue/email.queue.js";
+import {PASSWORD_PEPPER} from "../config/env.js"
 
 export const authService = {
   async registerTenant(data :{
@@ -14,7 +15,7 @@ export const authService = {
     const existingUser = await tenantRepository.findBySlug(data.slug);
     if (existingUser) throw new Error("SLUG_TAKEN");
 
-    const hashedPassword = await argon2.hash(data.password);
+    const hashedPassword = await argon2.hash(data.password , {secret : PASSWORD_PEPPER});
 
     const verificationToken = crypto.randomUUID();
 

@@ -5,11 +5,11 @@ const envSchema = z.object({
   AGENTGATE_DATABASE_URL: z.string().url(),
   AGENTGATE_REDIS_URL: z.string().url(),
   AGENTGATE_JWT_SECRET: z.string().min(32),
+  AGENTGATE_PASSWORD_PEPPER : z.string().length(64),
   AGENTGATE_PLATFORM_ENCRYPTION_KEY: z.string().length(64),
   AGENTGATE_PORT: z.coerce.number().default(4000),
   AGENTGATE_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   AGENTGATE_NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
-
   // ═══════════════════════════════════════════════════════
   // Week 1 — SMTP (uncomment when email verification is built)
   // ═══════════════════════════════════════════════════════
@@ -47,5 +47,7 @@ const envSchema = z.object({
   3. The result of `.parse()` is a plain JavaScript object that is fully typed. When you import env in server.ts, you aren't talking to the .env file anymore; you are talking to a validated, typed object in memory.
 **/
 export const env = envSchema.parse(process.env);
+
+export const PASSWORD_PEPPER = Buffer.from(env.AGENTGATE_PASSWORD_PEPPER , "hex")
 
 export type Env = z.infer<typeof envSchema>;
