@@ -1,0 +1,77 @@
+import  type {FastifyInstance}  from 'fastify'
+import { authService } from '../../services/auth.service.js'
+
+export async function registerRoutes(app: FastifyInstance) {
+  // POST /auth/register-tenant
+  app.post(
+    '/register-tenant',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['tenantName', 'slug', 'ownerEmail', 'password'],
+          properties: {
+            tenantName: { type: 'string', minLength: 2 },
+            slug: { type: 'string', minLength: 2, pattern: '^[a-z0-9-]+$' },
+            ownerEmail: { type: 'string', format: 'email' },
+            password: { type: 'string', minLength: 8 },
+          },
+        },
+        response: {
+          201: {
+            type: 'object',
+            properties: {
+              tenant: { type: 'object' },
+              user: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  email: { type: 'string' },
+                  role: { type: 'string' },
+                  // passwordHash is NOT in this schema — it will never appear in response
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const result = await authService.registerTenant(request.body as any)
+        return reply.status(201).send(result)
+      } catch (err: any) {
+        if (err.message === 'SLUG_TAKEN') {
+          return reply.conflict('A tenant with this slug already exists')
+        }
+        throw err
+      }
+    }
+  )
+
+  // GET /auth/verify-email
+  app.get(
+    '/verify-email',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          required: ['token'],
+          properties: { token: { type: 'string' } },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const { token } = request.query as { token: string }
+        await authService.verifyEmail(token)
+        return reply.send({ message: 'Email verified successfully' })
+      } catch (err: any) {
+        if (err.message === 'INVALID_TOKEN') {
+          return reply.badRequest('Invalid or expired verification token')
+        }
+        throw err
+      }
+    }
+  )
+}

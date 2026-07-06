@@ -1,6 +1,8 @@
 import Fastify from "fastify";
+import sensible from "@fastify/sensible";
 import { env } from "./config/env.js";
 import healthRoutes from "./routes/healthcheck.js";
+import { registerRoutes } from "./routes/auth/register.js";
 
 export async function createApp() {
   const logger: Record<string, unknown> = {
@@ -24,7 +26,7 @@ export async function createApp() {
   // Phase 1 — Infrastructure plugins (Week 1+)
   // ═══════════════════════════════════════════════════════
   // Will be added incrementally as each plugin is built:
-  //   await app.register(sensiblePlugin)
+    await app.register(sensible);
   //   await app.register(tenantContextPlugin)
   //   etc.
 
@@ -32,6 +34,8 @@ export async function createApp() {
   // Phase 2 — Public routes (no auth)
   // ═══════════════════════════════════════════════════════
   await app.register(healthRoutes);
+
+  await app.register(registerRoutes, { prefix: '/auth' })
 
   // ═══════════════════════════════════════════════════════
   // Phase 3 — Protected REST scope (JWT + TenantContext)
