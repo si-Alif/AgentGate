@@ -4,6 +4,12 @@ import jwt from "@fastify/jwt";
 import { env } from "./config/env.js";
 import healthRoutes from "./routes/healthcheck.js";
 import { registerRoutes } from "./routes/auth/register.js";
+import { loginRoutes } from "./routes/auth/login.js";
+import { refreshRoutes } from "./routes/auth/refresh.js";
+import { logoutRoutes } from "./routes/auth/logout.js";
+import tenantContextPlugin from "./plugins/tenant-context.plugin.js";
+import { authenticate } from "./hooks/authenticate.hook.js";
+import { attachTenantContext } from "./hooks/attach-tenant-context.hook.js";
 
 export async function createApp() {
   const logger: Record<string, unknown> = {
@@ -36,7 +42,8 @@ export async function createApp() {
       expiresIn: "15m",
     },
   });
-  //   await app.register(tenantContextPlugin)
+  // TenantContext decorator (required so TypeScript can write request.tenantContext)
+  await app.register(tenantContextPlugin);
   //   etc.
 
   // ═══════════════════════════════════════════════════════
@@ -44,12 +51,48 @@ export async function createApp() {
   // ═══════════════════════════════════════════════════════
   await app.register(healthRoutes);
 
-  await app.register(registerRoutes, { prefix: '/auth' })
+  await app.register(registerRoutes, { prefix: "/auth" });
+  await app.register(loginRoutes, { prefix: "/auth" });
+  await app.register(refreshRoutes, { prefix: "/auth" });
+  await app.register(logoutRoutes, { prefix: "/auth" });
 
   // ═══════════════════════════════════════════════════════
   // Phase 3 — Protected REST scope (JWT + TenantContext)
   // ═══════════════════════════════════════════════════════
-  // Added in Week 1+ when auth routes exist.
+  // Week 4 endpoint proof: /api/ping
+  await app.register(
+    async (scope) => {
+      scope.addHook("preHandler", authenticate);
+      scope.addHook("preHandler", attachTenantContext);
+
+      scope.get(
+        "/api/ping",
+        {
+          schema: {
+            response: {
+              200: {
+                type: "object",
+                properties: {
+                  message: { type: "string" },
+                  tenantId: { type: "string" },
+                  userId: { type: "string" },
+                  role: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        async (request) => {
+          return {
+            message: "pong",
+            tenantId: request.tenantContext!.tenantId,
+            userId: request.tenantContext!.userId,
+            role: request.tenantContext!.role,
+          };
+        }
+      );
+    }
+  );
 
   // ═══════════════════════════════════════════════════════
   // Phase 4 — MCP Gateway scope (API key auth)

@@ -1,0 +1,40 @@
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createApp } from "../app.js";
+import { createTestTenant, cleanupTenant } from "./helpers/test-tenant.factory.js";
+import type { FastifyInstance } from "fastify";
+import { prisma } from "../lib/prisma.js";
+
+describe("Day 4 — JWT auth lifecycle", () => {
+  let app: FastifyInstance;
+  const createdTenantIds: string[] = [];
+
+  beforeAll(async () => {
+    app = await createApp();
+  });
+
+  afterEach(async () => {
+    // Only ever removes what THIS test file created.
+    await Promise.all(createdTenantIds.splice(0).map(cleanupTenant));
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("login: success returns accessToken + refreshToken, without leaking secrets", async () => {
+    const tenant = await createTestTenant(app);
+    createdTenantIds.push(tenant.tenantId);
+
+    expect(typeof tenant.accessToken).toBe("string");
+    expect(typeof tenant.refreshToken).toBe("string");
+
+    const stored = await prisma.user.findUnique({
+      where: { id: tenant.userId },
+      select: { refreshTokenHash: true },
+    });
+    expect(stored?.refreshTokenHash).toBeTruthy();
+    expect(stored?.refreshTokenHash).not.toBe(tenant.refreshToken);
+  });
+
+  // remaining tests follow the same pattern — factory + scoped cleanup
+});

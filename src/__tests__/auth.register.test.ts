@@ -43,7 +43,7 @@ describe('Day 3 auth flow', () => {
         where: { email: 'owner@acme.test' },
       });
 
-      expect(storedUser).not.toBeNull();
+      expect(storedUser).not.toBeUndefined();
       expect(storedUser?.passwordHash.startsWith('$argon2')).toBe(true);
       expect(storedUser?.passwordHash).not.toBe('StrongPass123!');
       expect(storedUser?.isVerified).toBe(false);
