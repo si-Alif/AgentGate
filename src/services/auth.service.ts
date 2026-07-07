@@ -53,8 +53,6 @@ export const authService = {
         role: res.user.role
       }
     }
-
-
   },
 
   async verifyEmail(token: string) {

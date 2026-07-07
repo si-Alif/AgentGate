@@ -1,14 +1,17 @@
-import type {DbClient} from "../types/db-client.type.js"
+import type { DbClient } from "../types/db-client.type.js"
 import { prisma } from "../lib/prisma.js";
 
 export const userRepository = {
-  findByEmail: (email: string, client:DbClient  = prisma) =>
+  findByEmail: (email: string, client: DbClient = prisma) =>
     client.user.findUnique({ where: { email } }),
 
-  findById: (id: string, tenantId: string, client:DbClient  = prisma) =>
+  findById: (id: string, tenantId: string, client: DbClient = prisma) =>
     client.user.findFirst({ where: { id, tenantId } }),
 
-  findByVerificationToken: (token: string, client:DbClient  = prisma) =>
+  findByIdOnly: (id: string, client: DbClient = prisma) =>
+    client.user.findUnique({ where: { id } }),
+
+  findByVerificationToken: (token: string, client: DbClient = prisma) =>
     client.user.findFirst({ where: { verificationToken: token } }),
 
   create: (

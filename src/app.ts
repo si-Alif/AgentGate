@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import sensible from "@fastify/sensible";
+import jwt from "@fastify/jwt";
 import { env } from "./config/env.js";
 import healthRoutes from "./routes/healthcheck.js";
 import { registerRoutes } from "./routes/auth/register.js";
@@ -26,7 +27,15 @@ export async function createApp() {
   // Phase 1 — Infrastructure plugins (Week 1+)
   // ═══════════════════════════════════════════════════════
   // Will be added incrementally as each plugin is built:
-    await app.register(sensible);
+  await app.register(sensible);
+
+  // JWT plugin (foundation for authenticate hook)
+  await app.register(jwt, {
+    secret: env.AGENTGATE_JWT_SECRET,
+    sign: {
+      expiresIn: "15m",
+    },
+  });
   //   await app.register(tenantContextPlugin)
   //   etc.
 

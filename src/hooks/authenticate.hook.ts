@@ -20,6 +20,6 @@ export async function authenticate(
   try {
     await request.jwtVerify();
   } catch (_err) {
-    reply.unauthorized("Invalid or expired token");
+    return reply.unauthorized("Invalid or expired token");
   }
 }
