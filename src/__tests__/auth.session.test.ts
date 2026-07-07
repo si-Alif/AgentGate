@@ -36,5 +36,21 @@ describe("Day 4 — JWT auth lifecycle", () => {
     expect(stored?.refreshTokenHash).not.toBe(tenant.refreshToken);
   });
 
+  it("rejects a tampered access token on /api/ping", async () => {
+    const tenant = await createTestTenant(app);
+    createdTenantIds.push(tenant.tenantId);
+
+    // Flip last 2 chars to corrupt signature/payload.
+    const tampered = tenant.accessToken.slice(0, -2) + "xx";
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/ping",
+      headers: { authorization: `Bearer ${tampered}` },
+    });
+
+    expect(res.statusCode).toBe(401);
+  });
+
   // remaining tests follow the same pattern — factory + scoped cleanup
 });

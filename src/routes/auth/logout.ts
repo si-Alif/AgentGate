@@ -1,10 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
 import { authService } from "../../services/auth.service.js";
-
-const logoutBodySchema = z.object({
-  refreshToken: z.string().min(20),
-});
 
 export async function logoutRoutes(app: FastifyInstance) {
   app.post(
@@ -15,7 +10,7 @@ export async function logoutRoutes(app: FastifyInstance) {
           type: "object",
           required: ["refreshToken"],
           properties: {
-            refreshToken: { type: "string" },
+            refreshToken: { type: "string", minLength: 20 },
           },
         },
         response: {
@@ -23,12 +18,11 @@ export async function logoutRoutes(app: FastifyInstance) {
             type: "object",
             properties: { loggedOut: { type: "boolean" } },
           },
-          401: { type: "string" },
         },
       },
     },
     async (request, reply) => {
-      const body = logoutBodySchema.parse(request.body);
+      const body = request.body as { refreshToken: string };
 
       try {
         const result = await authService.logout({ refreshToken: body.refreshToken });

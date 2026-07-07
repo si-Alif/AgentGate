@@ -15,17 +15,23 @@ import type { TenantContext } from "../types/fastify.js";
  */
 export async function attachTenantContext(
   request: FastifyRequest,
-  _reply: FastifyReply,
+  reply: FastifyReply,
 ) {
-  const payload = request.user as {
+  const payload = request.user as Partial<{
     tenantId: string;
     userId: string;
     role: "owner" | "admin" | "member";
-  };
+  }> | undefined;
+
+  // Fail closed: if any of the required identity claims are missing,
+  // do not set tenantContext and reject the request as unauthorized.
+  if (!payload || typeof payload.tenantId !== "string" || !payload.tenantId || typeof payload.userId !== "string" || !payload.userId || typeof payload.role !== "string" || !payload.role) {
+    return reply.unauthorized("Malformed token — missing required claims");
+  }
 
   request.tenantContext = {
     tenantId: payload.tenantId,
     userId: payload.userId,
-    role: payload.role,
+    role: payload.role as "owner" | "admin" | "member",
   } satisfies TenantContext;
 }

@@ -1,10 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
 import { authService } from "../../services/auth.service.js";
-
-const refreshBodySchema = z.object({
-  refreshToken: z.string().min(20),
-});
 
 export async function refreshRoutes(app: FastifyInstance) {
   app.post(
@@ -15,7 +10,7 @@ export async function refreshRoutes(app: FastifyInstance) {
           type: "object",
           required: ["refreshToken"],
           properties: {
-            refreshToken: { type: "string" },
+            refreshToken: { type: "string", minLength: 20 },
           },
         },
         response: {
@@ -26,12 +21,11 @@ export async function refreshRoutes(app: FastifyInstance) {
               expiresIn: { type: "number" },
             },
           },
-          401: { type: "string" },
         },
       },
     },
     async (request, reply) => {
-      const body = refreshBodySchema.parse(request.body);
+      const body = request.body as { refreshToken: string };
 
       try {
         const result = await authService.refresh({

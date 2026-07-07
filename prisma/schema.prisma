@@ -37,6 +37,7 @@ model User {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
+  @@index([refreshTokenHash])
   @@index([verificationToken])
   @@map("users")
 }

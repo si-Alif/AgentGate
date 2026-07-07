@@ -1,11 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
 import { authService } from "../../services/auth.service.js";
-
-const loginBodySchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
-});
 
 export async function loginRoutes(app: FastifyInstance) {
   app.post(
@@ -29,13 +23,14 @@ export async function loginRoutes(app: FastifyInstance) {
               expiresIn: { type: "number" },
             },
           },
-          401: { type: "string" },
-          403: { type: "string" },
         },
       },
     },
     async (request, reply) => {
-      const body = loginBodySchema.parse(request.body);
+      const body = request.body as {
+        email: string;
+        password: string;
+      };
 
       try {
         const result = await authService.login({

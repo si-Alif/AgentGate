@@ -4,9 +4,21 @@ import { prisma } from "../lib/prisma.js";
 import { tenantRepository } from "../repositories/tenant.repository.js";
 import { userRepository } from "../repositories/user.repository.js";
 import { emailQueue } from "../queue/email.queue.js";
-import { PASSWORD_PEPPER } from "../config/env.js"
-
+import { PASSWORD_PEPPER, REFRESH_TOKEN_SECRET } from "../config/env.js";
+ 
 import type { FastifyInstance } from "fastify";
+
+const DUMMY_PASSWORD = "dummy-password-for-timing-parity";
+let dummyPasswordHashPromise: Promise<string> | null = null;
+
+async function getDummyPasswordHash() {
+  if (!dummyPasswordHashPromise) {
+    dummyPasswordHashPromise = argon2.hash(DUMMY_PASSWORD, {
+      secret: PASSWORD_PEPPER,
+    });
+  }
+  return dummyPasswordHashPromise;
+}
 
 export const authService = {
   async registerTenant(data: {
@@ -15,8 +27,8 @@ export const authService = {
     ownerEmail: string
     password: string
   }) {
-    const existingUser = await tenantRepository.findBySlug(data.slug);
-    if (existingUser) throw new Error("SLUG_TAKEN");
+    const existingTenant = await tenantRepository.findBySlug(data.slug);
+    if (existingTenant) throw new Error("SLUG_TAKEN");
 
     const hashedPassword = await argon2.hash(data.password, { secret: PASSWORD_PEPPER });
 
@@ -86,14 +98,18 @@ export const authService = {
     const { email, password, app } = params;
 
     const user = await userRepository.findByEmail(email);
-    if (!user) throw new Error("INVALID_CREDENTIALS");
 
-    const passwordValid = await argon2.verify(user.passwordHash, password, {
+    // Timing-side-channel mitigation:
+    // Always perform argon2.verify work, even if user doesn't exist.
+    const dummyHash = await getDummyPasswordHash();
+    const passwordHashToVerify = user?.passwordHash ?? dummyHash;
+
+    const passwordValid = await argon2.verify(passwordHashToVerify, password, {
       secret: PASSWORD_PEPPER,
     });
 
     // Non-enumerating auth failure: wrong email and wrong password share the same error.
-    if (!passwordValid) throw new Error("INVALID_CREDENTIALS");
+    if (!user || !passwordValid) throw new Error("INVALID_CREDENTIALS");
     if (!user.isVerified) throw new Error("EMAIL_NOT_VERIFIED");
 
     // Access token — minimal payload (identity only)
@@ -110,7 +126,7 @@ export const authService = {
     // Store only a deterministic keyed hash (never plaintext), so we can look up the user.
     const rawRefreshToken = crypto.randomBytes(32).toString("base64url");
     const refreshTokenHash = crypto
-      .createHmac("sha256", PASSWORD_PEPPER)
+      .createHmac("sha256", REFRESH_TOKEN_SECRET)
       .update(rawRefreshToken)
       .digest("hex");
 
@@ -127,7 +143,7 @@ export const authService = {
     const { refreshToken, app } = params;
 
     const refreshTokenHash = crypto
-      .createHmac("sha256", PASSWORD_PEPPER)
+      .createHmac("sha256", REFRESH_TOKEN_SECRET)
       .update(refreshToken)
       .digest("hex");
 
@@ -150,7 +166,7 @@ export const authService = {
     const { refreshToken } = params;
 
     const refreshTokenHash = crypto
-      .createHmac("sha256", PASSWORD_PEPPER)
+      .createHmac("sha256", REFRESH_TOKEN_SECRET)
       .update(refreshToken)
       .digest("hex");
 
