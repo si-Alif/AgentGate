@@ -16,6 +16,7 @@ import fp from "fastify-plugin";
  */
 export default fp(async function tenantContextPlugin(fastify: FastifyInstance) {
   fastify.decorateRequest("tenantContext", null);
+  fastify.decorateRequest("activeUser", null);
 }, {
   name: "tenant-context",
 });

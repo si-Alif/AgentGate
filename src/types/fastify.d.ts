@@ -12,7 +12,8 @@ declare module "fastify" {
   }
 
   interface FastifyRequest {
-    tenantContext: TenantContext | null;
+    tenantContext: TenantContext;
+    activeUser: ActiveUser | null;
   }
 }
 
@@ -28,4 +29,10 @@ export interface TenantContext {
   tenantId: string;
   userId: string;
   role: "owner" | "admin" | "member";
+}
+
+export interface ActiveUser {
+  userId: string;
+  tenantId: string;
+  email: string;
 }

@@ -36,7 +36,7 @@ describe("Day 4 — JWT auth lifecycle", () => {
     expect(stored?.refreshTokenHash).not.toBe(tenant.refreshToken);
   });
 
-  it("rejects a tampered access token on /api/ping", async () => {
+  it("rejects a tampered access token on /api/me", async () => {
     const tenant = await createTestTenant(app);
     createdTenantIds.push(tenant.tenantId);
 
@@ -45,8 +45,47 @@ describe("Day 4 — JWT auth lifecycle", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/ping",
+      url: "/api/me",
       headers: { authorization: `Bearer ${tampered}` },
+    });
+
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("rejects missing Authorization header on /api/me with 401", async () => {
+    const tenant = await createTestTenant(app);
+    createdTenantIds.push(tenant.tenantId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/me",
+      // no Authorization header
+    });
+
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("rejects malformed token on /api/me with 401", async () => {
+    const tenant = await createTestTenant(app);
+    createdTenantIds.push(tenant.tenantId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/me",
+      headers: { authorization: "Bearer not-a-real-jwt" },
+    });
+
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("rejects wrong Authorization scheme (Basic) on /api/me with 401", async () => {
+    const tenant = await createTestTenant(app);
+    createdTenantIds.push(tenant.tenantId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/me",
+      headers: { authorization: "Basic dGVzdDp0ZXN0" },
     });
 
     expect(res.statusCode).toBe(401);

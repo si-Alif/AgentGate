@@ -25,8 +25,22 @@ export async function attachTenantContext(
 
   // Fail closed: if any of the required identity claims are missing,
   // do not set tenantContext and reject the request as unauthorized.
-  if (!payload || typeof payload.tenantId !== "string" || !payload.tenantId || typeof payload.userId !== "string" || !payload.userId || typeof payload.role !== "string" || !payload.role) {
+  if (
+    !payload ||
+    typeof payload.tenantId !== "string" ||
+    !payload.tenantId ||
+    typeof payload.userId !== "string" ||
+    !payload.userId ||
+    typeof payload.role !== "string" ||
+    !payload.role
+  ) {
     return reply.unauthorized("Malformed token — missing required claims");
+  }
+
+  // Runtime whitelist hardening (JWT payload is not intrinsically trusted).
+  const allowedRoles = ["owner", "admin", "member"] as const;
+  if (!allowedRoles.includes(payload.role as (typeof allowedRoles)[number])) {
+    return reply.unauthorized("Malformed token — invalid role");
   }
 
   request.tenantContext = {

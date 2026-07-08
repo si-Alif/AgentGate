@@ -10,8 +10,10 @@ import { logoutRoutes } from "./routes/auth/logout.js";
 import tenantContextPlugin from "./plugins/tenant-context.plugin.js";
 import { authenticate } from "./hooks/authenticate.hook.js";
 import { attachTenantContext } from "./hooks/attach-tenant-context.hook.js";
+import { requireActiveIdentity } from "./hooks/require-active-identity.hook.js";
+import { prisma } from "./lib/prisma.js";
 
-export async function createApp() {
+export async function createApp(): Promise<Fastify.FastifyInstance> {
   const logger: Record<string, unknown> = {
     level: env.AGENTGATE_LOG_LEVEL,
   };
@@ -59,21 +61,21 @@ export async function createApp() {
   // ═══════════════════════════════════════════════════════
   // Phase 3 — Protected REST scope (JWT + TenantContext)
   // ═══════════════════════════════════════════════════════
-  // Week 4 endpoint proof: /api/ping
   await app.register(
     async (scope) => {
       scope.addHook("preHandler", authenticate);
       scope.addHook("preHandler", attachTenantContext);
+      scope.addHook("preHandler", requireActiveIdentity);
 
+      // Day 5 boundary proof endpoint (token-derived)
       scope.get(
-        "/api/ping",
+        "/api/me",
         {
           schema: {
             response: {
               200: {
                 type: "object",
                 properties: {
-                  message: { type: "string" },
                   tenantId: { type: "string" },
                   userId: { type: "string" },
                   role: { type: "string" },
@@ -84,11 +86,32 @@ export async function createApp() {
         },
         async (request) => {
           return {
-            message: "pong",
-            tenantId: request.tenantContext!.tenantId,
-            userId: request.tenantContext!.userId,
-            role: request.tenantContext!.role,
+            tenantId: request.tenantContext.tenantId,
+            userId: request.tenantContext.userId,
+            role: request.tenantContext.role,
           };
+        }
+      );
+
+      // Day 6 isolation proof endpoint (DB tenant-scoped read)
+      scope.get(
+        "/api/me/details",
+        {
+          schema: {
+            response: {
+              200: {
+                type: "object",
+                properties: {
+                  tenantId: { type: "string" },
+                  userId: { type: "string" },
+                  email: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        async (request) => {
+          return request.activeUser;
         }
       );
     }

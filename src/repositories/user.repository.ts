@@ -3,23 +3,31 @@ import { prisma } from "../lib/prisma.js";
 
 export const userRepository = {
   findByEmail: (email: string, client: DbClient = prisma) =>
-    client.user.findUnique({ where: { email } }),
+    client.user.findFirst({
+      where: { email, deletedAt: null, tenant: { deletedAt: null } },
+    }),
 
   findById: (id: string, tenantId: string, client: DbClient = prisma) =>
-    client.user.findFirst({ where: { id, tenantId } }),
+    client.user.findFirst({
+      where: { id, tenantId, deletedAt: null, tenant: { deletedAt: null } },
+    }),
 
   /**
    * Used for flows that already have tenant context; avoids tenant leakage.
    */
   findByIdOnly: (id: string, client: DbClient = prisma) =>
-    client.user.findUnique({ where: { id } }),
+    client.user.findFirst({ where: { id, deletedAt: null, tenant: { deletedAt: null } } }),
 
   findByRefreshTokenHash: (hash: string, client: DbClient = prisma) =>
-    client.user.findFirst({ where: { refreshTokenHash: hash } }),
+    client.user.findFirst({
+      where: { refreshTokenHash: hash, deletedAt: null, tenant: { deletedAt: null } },
+    }),
 
   // Used by auth verification flow
   findByVerificationToken: (token: string, client: DbClient = prisma) =>
-    client.user.findFirst({ where: { verificationToken: token } }),
+    client.user.findFirst({
+      where: { verificationToken: token, deletedAt: null, tenant: { deletedAt: null } },
+    }),
 
   create: (
     data: {
