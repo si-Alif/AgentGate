@@ -12,11 +12,11 @@ export const userRepository = {
       where: { id, tenantId, deletedAt: null, tenant: { deletedAt: null } },
     }),
 
-  /**
-   * Used for flows that already have tenant context; avoids tenant leakage.
-   */
-  findByIdOnly: (id: string, client: DbClient = prisma) =>
-    client.user.findFirst({ where: { id, deletedAt: null, tenant: { deletedAt: null } } }),
+  // /**
+  //  * Used for flows that already have tenant context; avoids tenant leakage.
+  //  */
+  // findByIdOnly: (id: string, client: DbClient = prisma) =>
+  //   client.user.findFirst({ where: { id, deletedAt: null, tenant: { deletedAt: null } } }),
 
   findByRefreshTokenHash: (hash: string, client: DbClient = prisma) =>
     client.user.findFirst({
@@ -40,19 +40,20 @@ export const userRepository = {
     client: DbClient = prisma
   ) => client.user.create({ data }),
 
-  updateVerified: (id: string, client: DbClient = prisma) =>
+  updateVerified: (id: string, tenantId: string, client: DbClient = prisma) =>
     client.user.update({
-      where: { id },
+      where: { id, tenantId },
       data: { isVerified: true, verificationToken: null },
     }),
 
   updateRefreshTokenHash: (
     id: string,
+    tenantId: string,
     hash: string | null,
     client: DbClient = prisma
   ) =>
     client.user.update({
-      where: { id },
+      where: { id, tenantId },
       data: { refreshTokenHash: hash },
     }),
 };

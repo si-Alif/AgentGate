@@ -12,7 +12,7 @@ declare module "fastify" {
   }
 
   interface FastifyRequest {
-    tenantContext: TenantContext;
+    tenantContext: TenantContext | null;
     activeUser: ActiveUser | null;
   }
 }

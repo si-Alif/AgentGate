@@ -26,39 +26,41 @@ export async function createTestTenant(
   const slug = `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const email = `owner-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@test.local`;
 
-  await app.inject({
+  const regRes = await app.inject({
     method: "POST",
     url: "/auth/register-tenant",
     payload: { tenantName: "Test Co", slug, ownerEmail: email, password },
   });
+  if (regRes.statusCode !== 201) {
+    throw new Error(`createTestTenant: registration failed (${regRes.statusCode}): ${regRes.body}`);
+  }
 
   const user = await prisma.user.findUniqueOrThrow({ where: { email } });
 
-  await app.inject({
+  const verifyRes = await app.inject({
     method: "GET",
     url: `/auth/verify-email?token=${user.verificationToken}`,
   });
+  if (verifyRes.statusCode !== 200) {
+    throw new Error(`createTestTenant: verify-email failed (${verifyRes.statusCode}): ${verifyRes.body}`);
+  }
 
   const loginRes = await app.inject({
     method: "POST",
     url: "/auth/login",
     payload: { email, password },
   });
+  if (loginRes.statusCode !== 200) {
+    throw new Error(`createTestTenant: login failed (${loginRes.statusCode}): ${loginRes.body}`);
+  }
 
   const { accessToken, refreshToken } = loginRes.json() as {
     accessToken: string;
     refreshToken: string;
   };
 
-  return {
-    tenantId: user.tenantId,
-    userId: user.id,
-    email,
-    accessToken,
-    refreshToken,
-  };
+  return { tenantId: user.tenantId, userId: user.id, email, accessToken, refreshToken };
 }
-
 /**
  * Scoped teardown — deletes exactly the tenant this test created,
  * via cascade, and NOTHING else. Safe to call in serialized OR

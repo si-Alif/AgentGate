@@ -1,11 +1,13 @@
 import argon2 from "argon2";
 import crypto from "crypto";
 import { prisma } from "../lib/prisma.js";
+import { Prisma } from "@prisma/client";
 import { tenantRepository } from "../repositories/tenant.repository.js";
 import { userRepository } from "../repositories/user.repository.js";
 import { emailQueue } from "../queue/email.queue.js";
 import { PASSWORD_PEPPER, REFRESH_TOKEN_SECRET } from "../config/env.js";
- 
+import {assertValidRole} from "../lib/role.js"
+
 import type { FastifyInstance } from "fastify";
 
 const DUMMY_PASSWORD = "dummy-password-for-timing-parity";
@@ -34,47 +36,29 @@ export const authService = {
 
     const verificationToken = crypto.randomUUID();
 
-    const res = await prisma.$transaction(async (tx) => {
-      const tenant = await tenantRepository.create(
-        {
-          name: data.tenantName,
-          slug: data.slug,
-        },
-        tx
-      );
-
-      const user = await userRepository.create(
-        {
-          tenantId: tenant.id,
-          email: data.ownerEmail,
-          passwordHash: hashedPassword,
-          role: "owner",
-          verificationToken: verificationToken,
-        },
-        tx
-      );
-
-      return { tenant, user };
-    });
-
-    emailQueue
-      .add("verification", {
-        type: "verification",
-        email: data.ownerEmail,
-        token: verificationToken,
-      })
-      .catch((err) => {
-        console.error("[EMAIL QUEUE] Failed to enqueue:", err);
+    try {
+      const res = await prisma.$transaction(async (tx) => {
+        const tenant = await tenantRepository.create({ name: data.tenantName, slug: data.slug }, tx);
+        const user = await userRepository.create(
+          { tenantId: tenant.id, email: data.ownerEmail, passwordHash: hashedPassword, role: "owner", verificationToken },
+          tx
+        );
+        return { tenant, user };
       });
 
-    return {
-      tenant: res.tenant,
-      user: {
-        id: res.user.id,
-        email: res.user.email,
-        role: res.user.role,
-      },
-    };
+      emailQueue.add("verification", { type: "verification", email: data.ownerEmail, token: verificationToken })
+        .catch((err) => console.error("[EMAIL QUEUE] Failed to enqueue:", err));
+
+      return { tenant: res.tenant, user: { id: res.user.id, email: res.user.email, role: res.user.role } };
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        const target = Array.isArray(err.meta?.target) ? err.meta.target.join(",") : String(err.meta?.target ?? "");
+        if (target.includes("email")) throw new Error("EMAIL_TAKEN");
+        if (target.includes("slug")) throw new Error("SLUG_TAKEN");
+        throw new Error("DUPLICATE_ENTRY");
+      }
+      throw err;
+    }
   },
 
   async verifyEmail(token: string) {
@@ -85,7 +69,7 @@ export const authService = {
     // updateVerified() is responsible for:
     // - isVerified = true
     // - verificationToken = null
-    await userRepository.updateVerified(user.id);
+    await userRepository.updateVerified(user.id, user.tenantId);
 
     return { verified: true };
   },
@@ -117,7 +101,7 @@ export const authService = {
       {
         tenantId: user.tenantId,
         userId: user.id,
-        role: user.role as "owner" | "admin" | "member",
+        role: assertValidRole(user.role),
       },
       { expiresIn: "15m" }
     );
@@ -130,7 +114,7 @@ export const authService = {
       .update(rawRefreshToken)
       .digest("hex");
 
-    await userRepository.updateRefreshTokenHash(user.id, refreshTokenHash);
+    await userRepository.updateRefreshTokenHash(user.id , user.tenantId, refreshTokenHash);
 
     return {
       accessToken,
@@ -154,7 +138,7 @@ export const authService = {
       {
         tenantId: user.tenantId,
         userId: user.id,
-        role: user.role as "owner" | "admin" | "member",
+        role: assertValidRole(user.role),
       },
       { expiresIn: "15m" }
     );
@@ -173,7 +157,7 @@ export const authService = {
     const user = await userRepository.findByRefreshTokenHash(refreshTokenHash);
     if (!user) throw new Error("INVALID_REFRESH_TOKEN");
 
-    await userRepository.updateRefreshTokenHash(user.id, null);
+    await userRepository.updateRefreshTokenHash(user.id, user.tenantId ,null);
     return { loggedOut: true };
   },
 };

@@ -55,10 +55,19 @@ export async function registerRoutes(app: FastifyInstance) {
         const result = await authService.registerTenant(request.body as RegisterTenantInput)
         return reply.status(201).send(result)
       } catch (err: any) {
-        if (err.message === 'SLUG_TAKEN') {
-          return reply.conflict('A tenant with this slug already exists')
+        if (err.message === "SLUG_TAKEN") {
+          return reply.conflict("A tenant with this slug already exists");
         }
-        throw err
+        if (err.message === "EMAIL_TAKEN") {
+          return reply.conflict("An account with this email already exists");
+        }
+        if (err.message === "DUPLICATE_ENTRY") {
+          return reply.conflict("A conflicting record already exists");
+        }
+        if (err.message === "INVALID_TOKEN") {
+          return reply.badRequest("Invalid verification token");
+        }
+        throw err;
       }
     }
   )
@@ -81,10 +90,10 @@ export async function registerRoutes(app: FastifyInstance) {
         await authService.verifyEmail(token)
         return reply.send({ message: 'Email verified successfully' })
       } catch (err: any) {
-        if (err.message === 'INVALID_TOKEN') {
-          return reply.badRequest('Invalid or expired verification token')
+        if (err.message === "INVALID_TOKEN") {
+          return reply.badRequest("Invalid verification token");
         }
-        throw err
+        throw err;
       }
     }
   )
