@@ -17,6 +17,7 @@ model Tenant {
   deletedAt DateTime? @map("deleted_at")
 
   users User[]
+  agents Agent[]
 
   @@map("tenants")
 }
@@ -40,4 +41,24 @@ model User {
   @@index([refreshTokenHash])
   @@index([verificationToken])
   @@map("users")
+}
+
+model Agent {
+  id           String    @id @default(uuid())
+  tenantId     String    @map("tenant_id")
+  name         String
+  description  String?
+  apiKeyId     String    @unique @map("api_key_id")
+  apiKeyHash   String    @map("api_key_hash")
+  isActive     Boolean   @default(true) @map("is_active")
+  createdBy    String    @map("created_by")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  lastActiveAt DateTime? @map("last_active_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name])
+  @@index([tenantId]) // even though the composite index can be used for tenantId lookups, this index is added separately around tenantId to improve query performance for lookups cz tenantId based lookup is a common use case
+  @@map("agents")
 }

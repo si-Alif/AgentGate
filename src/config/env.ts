@@ -8,6 +8,7 @@ const envSchema = z.object({
 
   // Argo2 password "secret" (pepper) in hex (32 bytes => 64 hex chars)
   AGENTGATE_PASSWORD_PEPPER: z.string().length(64),
+  AGENTGATE_API_KEY_PEPPER : z.string().length(64),
 
   // Refresh-token HMAC lookup secret in hex (32 bytes => 64 hex chars)
   AGENTGATE_REFRESH_TOKEN_SECRET: z.string().length(64),
@@ -55,6 +56,11 @@ const envSchema = z.object({
 export const env = envSchema.parse(process.env);
 
 export const PASSWORD_PEPPER = Buffer.from(env.AGENTGATE_PASSWORD_PEPPER, "hex");
+export const API_KEY_PEPPER = Buffer.from(env.AGENTGATE_API_KEY_PEPPER, "hex");
+export const PLATFORM_ENCRYPTION_KEY = Buffer.from(
+  env.AGENTGATE_PLATFORM_ENCRYPTION_KEY,
+  "hex"
+);
 export const REFRESH_TOKEN_SECRET = Buffer.from(
   env.AGENTGATE_REFRESH_TOKEN_SECRET,
   "hex"
