@@ -6,7 +6,7 @@ export const agentRepository = {
     data :{
       tenantId : string,
       name : string,
-      description? : string,
+      description? : string | null,
       apiKeyId : string,
       apiKeyHash : string,
       createdBy : string;
@@ -38,12 +38,20 @@ export const agentRepository = {
   }),
 
   // update general agent info (name, description, isActive) by id and tenantId
-  updateById: (
+  updateProfile: (
     id: string,
     tenantId: string,
-    data: Partial<{ name: string; description: string; isActive: boolean }>,
+    data: Partial<{ name: string; description: string | null;}>,
     client: DbClient = prisma
   ) => client.agent.updateMany({ where: { id, tenantId }, data }),
+
+  setActiveStatus: (
+    id : string ,
+    tenantId : string,
+    isActive : boolean,
+    client : DbClient = prisma
+  ) => client.agent.updateMany({where : {id, tenantId}, data : {isActive}}
+  ),
 
   // update the apiKeyId and apiKeyHash for an agent by id and tenantId
   // used updateMany as it returns rows count that been changed instead of the actual updated row . So , if the changed row count is 0 , it can lead to two scenarios : either tenantId and agentId combination is wrong or agent belongs to another agent .
@@ -55,6 +63,8 @@ export const agentRepository = {
     client : DbClient = prisma
   ) => client.agent.updateMany({where : {id, tenantId}, data}),
 
+  // `id` passed in must already have come through findByKeyId — never
+  // from raw client input — or this needs a tenantId parameter added.
   touchLastActive : (
     id : string,
     client : DbClient = prisma

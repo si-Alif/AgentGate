@@ -23,6 +23,7 @@ export async function registerRoutes(app: FastifyInstance) {
             ownerEmail: { type: 'string', format: 'email' },
             password: { type: 'string', minLength: 8 },
           },
+          additionalProperties: false,
         },
         response: {
           201: {

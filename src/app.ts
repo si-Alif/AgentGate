@@ -1,13 +1,18 @@
 import Fastify, { type FastifyInstance, type FastifyError } from "fastify";
 import sensible from "@fastify/sensible";
 import jwt from "@fastify/jwt";
+
 import { env } from "./config/env.js";
+import tenantContextPlugin from "./plugins/tenant-context.plugin.js";
+
+
 import healthRoutes from "./routes/healthcheck.js";
 import { registerRoutes } from "./routes/auth/register.js";
 import { loginRoutes } from "./routes/auth/login.js";
 import { refreshRoutes } from "./routes/auth/refresh.js";
 import { logoutRoutes } from "./routes/auth/logout.js";
-import tenantContextPlugin from "./plugins/tenant-context.plugin.js";
+import { agentRoutes } from "./routes/agents.js";
+
 import { authenticate } from "./hooks/authenticate.hook.js";
 import { attachTenantContext } from "./hooks/attach-tenant-context.hook.js";
 import { requireActiveIdentity } from "./hooks/require-active-identity.hook.js";
@@ -29,7 +34,21 @@ export async function createApp(): Promise<FastifyInstance> {
     };
   }
 
-  const app = Fastify({ logger });
+  const app = Fastify({
+    logger,
+    ajv: {
+      customOptions: {
+        removeAdditional: false, // REQUIRED for additionalProperties:false to actually
+        // reject requests instead of silently stripping fields —
+        // this is what makes the PATCH isActive-bypass test (and
+        // every other additionalProperties:false schema) mean
+        // what it says.
+        allErrors: true,
+        coerceTypes: true,
+        useDefaults: true,
+      },
+    },
+  });
 
   // ═══════════════════════════════════════════════════════
   // Global error handler — must be registered before routes.
@@ -138,6 +157,9 @@ export async function createApp(): Promise<FastifyInstance> {
         return getActiveUser(request);
       }
     );
+
+    await scope.register(agentRoutes, { prefix: "/api/agents" });
+
   });
 
   // ═══════════════════════════════════════════════════════
