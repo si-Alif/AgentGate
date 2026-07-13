@@ -70,11 +70,11 @@ export function scanForUnsafeRegexPatterns(schema: unknown): SchemaSafetyCheckRe
 
 
 function measureDepth(value : unknown  , curr = 0) : number {
-  if(curr > MAX_SCHEMA_DEPTH + 3) return curr;
+  if(curr > MAX_SCHEMA_DEPTH + 5) return curr;
 
   if (value && typeof value === "object") {
     let maxChildDepth = curr;
-    for (const key of Object.keys(value as Record<string, unknown>)) {
+    for (const key of Object.values(value as Record<string, unknown>)) {
       maxChildDepth = Math.max(maxChildDepth, measureDepth(key , curr + 1));
     }
     return maxChildDepth;
