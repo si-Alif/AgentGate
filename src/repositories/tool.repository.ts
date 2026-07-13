@@ -38,7 +38,7 @@ export const toolRepository = {
     tenantId: string,
     isActive: boolean,
     client: DbClient = prisma
-  ) => client.agent.updateMany({ where: { id, tenantId }, data: { isActive } }
+  ) => client.tool.updateMany({ where: { id, tenantId }, data: { isActive } }
   ),
 
 }
