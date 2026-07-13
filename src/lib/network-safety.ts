@@ -54,7 +54,7 @@ export function checkHostnameSafety(rawHostname: string): NetworkSafetyCheckResu
   }
 
   // step3 : ipaddr.process() unifies IPv4-mapped IPv6 forms (e.g. "::ffff:127.0.0.1") with their IPv4 equivalent
-  const parsed = ipaddr.parse(normalized);
+  const parsed = ipaddr.process(normalized);
 
   // step4 : classify the IP address using range() . it tells us exactly what kind of network address this is.
   if(BLOCKED_IP_RANGES.has(parsed.range())) {
