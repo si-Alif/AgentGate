@@ -62,7 +62,7 @@ infra/destroy: confirm
 ## db/psql : open an interactive psql session in the running container
 .PHONY: db/psql
 db/psql:
-	docker compose exec db psql -U agentgate -d agentgate
+	docker compose exec postgres psql -U postgres -d agentgate
 
 ## db/logs : tail the postgres container logs
 .PHONY: db/logs

@@ -8,7 +8,7 @@ export const toolRepository = {
     data : {
       tenantId : string;
       name : string;
-      description? : string;
+      description? : string | null;
       category ?: string;
       handlerType : string; // immutable
       handlerConfig : string ; // encrypted ciphertext . immutable
