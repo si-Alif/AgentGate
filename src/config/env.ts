@@ -8,7 +8,7 @@ const envSchema = z.object({
 
   // Argo2 password "secret" (pepper) in hex (32 bytes => 64 hex chars)
   AGENTGATE_PASSWORD_PEPPER: z.string().length(64),
-  AGENTGATE_API_KEY_PEPPER : z.string().length(64),
+  AGENTGATE_API_KEY_PEPPER: z.string().length(64),
 
   // Refresh-token HMAC lookup secret in hex (32 bytes => 64 hex chars)
   AGENTGATE_REFRESH_TOKEN_SECRET: z.string().length(64),
@@ -55,15 +55,29 @@ const envSchema = z.object({
 **/
 export const env = envSchema.parse(process.env);
 
-export const PASSWORD_PEPPER = Buffer.from(env.AGENTGATE_PASSWORD_PEPPER, "hex");
-export const API_KEY_PEPPER = Buffer.from(env.AGENTGATE_API_KEY_PEPPER, "hex");
-export const PLATFORM_ENCRYPTION_KEY = Buffer.from(
+function parseHexEnv(value: string, name: string) {
+  if (!/^[0-9a-fA-F]+$/.test(value)) {
+    throw new Error(`${name} must be valid hex`);
+  }
+
+  const buffer = Buffer.from(value, "hex");
+
+  if (buffer.length !== 32) {
+    throw new Error(`${name} must decode to 32 bytes`);
+  }
+
+  return buffer;
+}
+
+export const PASSWORD_PEPPER = parseHexEnv(env.AGENTGATE_PASSWORD_PEPPER, "AGENTGATE_PASSWORD_PEPPER");
+export const API_KEY_PEPPER = parseHexEnv(env.AGENTGATE_API_KEY_PEPPER, "AGENTGATE_API_KEY_PEPPER");
+export const PLATFORM_ENCRYPTION_KEY = parseHexEnv(
   env.AGENTGATE_PLATFORM_ENCRYPTION_KEY,
-  "hex"
+  "AGENTGATE_PLATFORM_ENCRYPTION_KEY"
 );
-export const REFRESH_TOKEN_SECRET = Buffer.from(
+export const REFRESH_TOKEN_SECRET = parseHexEnv(
   env.AGENTGATE_REFRESH_TOKEN_SECRET,
-  "hex"
+  "AGENTGATE_REFRESH_TOKEN_SECRET"
 );
 
 export type Env = z.infer<typeof envSchema>;

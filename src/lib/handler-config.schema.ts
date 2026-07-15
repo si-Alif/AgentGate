@@ -1,5 +1,5 @@
-import {z} from 'zod';
-import {checkHttpUrlSafety , checkPostgresConnectionStringSafety} from "./network-safety.js"
+import { z } from 'zod';
+import { checkHttpUrlSafety, checkPostgresConnectionStringSafety } from "./network-safety.js"
 
 const MAX_CONFIG_STRING_LENGTH = 8_000;
 const FORBIDDEN_HEADER_NAMES = new Set([
@@ -13,13 +13,16 @@ const CRLF_PATTERN = /[\r\n]/;
 
 
 const safeHeaders = z
-  .record(z.string() , z.string())
+  .record(z.string(), z.string())
   .optional()
   .refine(
     (headers) => {
       if (!headers) return true;
       return Object.entries(headers).every(
-        ([key, value]) => !FORBIDDEN_HEADER_NAMES.has(key.toLowerCase()) && !CRLF_PATTERN.test(value)
+        ([key, value]) =>
+          !FORBIDDEN_HEADER_NAMES.has(key.toLowerCase()) &&
+          !CRLF_PATTERN.test(key) &&
+          !CRLF_PATTERN.test(value)
       );
     },
     { message: "headers must not override connection-level fields (Host, Content-Length, Transfer-Encoding, Connection) or contain CR/LF characters" }

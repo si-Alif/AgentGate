@@ -7,11 +7,26 @@ const toolResponseProps = {
   name: { type: "string" },
   description: { type: ["string", "null"] },
   category: { type: ["string", "null"] },
+  handlerType: { type: "string" },
   inputSchema: { type: "object" },
   outputSchema: { type: ["object", "null"] },
+  isActive: { type: "boolean" },
   createdAt: { type: "string", format: "date-time" },
   updatedAt: { type: "string", format: "date-time" },
 } as const;
+
+const toolRequired = [
+  "id",
+  "name",
+  "description",
+  "category",
+  "handlerType",
+  "inputSchema",
+  "outputSchema",
+  "isActive",
+  "createdAt",
+  "updatedAt",
+] as const;
 
 export async function toolRoutes(app: FastifyInstance) {
   app.post(
@@ -20,7 +35,7 @@ export async function toolRoutes(app: FastifyInstance) {
       schema: {
         body: {
           type: "object",
-          required: ["name", "handlerType", "handlerConfig" , "inputSchema"],
+          required: ["name", "handlerType", "handlerConfig", "inputSchema"],
           properties: {
             name: { type: "string", minLength: 1 },
             description: { type: "string" },
@@ -35,9 +50,8 @@ export async function toolRoutes(app: FastifyInstance) {
         response: {
           201: {
             type: "object",
-            properties: {
-              tool: { type: "object", required: ["id", "name", "description", "category", "inputSchema", "outputSchema", "createdAt", "updatedAt"], properties: toolResponseProps },
-            },
+            required: [...toolRequired],
+            properties: toolResponseProps,
           },
         },
       },
@@ -68,9 +82,8 @@ export async function toolRoutes(app: FastifyInstance) {
             type: "array",
             items: {
               type: "object",
-              properties: {
-                tool: { type: "object", required: ["id", "name", "description", "category", "inputSchema", "outputSchema", "createdAt", "updatedAt"], properties: toolResponseProps },
-              },
+              required: [...toolRequired],
+              properties: toolResponseProps,
             },
           },
         },
@@ -95,9 +108,8 @@ export async function toolRoutes(app: FastifyInstance) {
         response: {
           200: {
             type: "object",
-            properties: {
-              tool: { type: "object", required: ["id", "name", "description", "category", "inputSchema", "outputSchema", "createdAt", "updatedAt"], properties: toolResponseProps },
-            },
+            required: [...toolRequired],
+            properties: toolResponseProps,
           },
         },
       },
@@ -134,9 +146,8 @@ export async function toolRoutes(app: FastifyInstance) {
         response: {
           200: {
             type: "object",
-            properties: {
-              tool: { type: "object", required: ["id", "name", "description", "category", "inputSchema", "outputSchema", "createdAt", "updatedAt"], properties: toolResponseProps },
-            },
+            required: [...toolRequired],
+            properties: toolResponseProps,
           },
         },
       },
@@ -145,7 +156,7 @@ export async function toolRoutes(app: FastifyInstance) {
       const { tenantId } = getTenantContext(request);
       const { id } = request.params as { id: string };
       try {
-        const result = await toolService.updateTol(id, tenantId, request.body as { name?: string; description?: string; category?: string });
+        const result = await toolService.updateTool(id, tenantId, request.body as { name?: string; description?: string; category?: string });
         if (!result) {
           return reply.notFound("Tool not found");
         }
