@@ -7,33 +7,34 @@ datasource db {
 }
 
 model Tenant {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   name      String
-  slug      String   @unique
-  plan      String   @default("free")
-  settings  Json     @default("{}")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  slug      String    @unique
+  plan      String    @default("free")
+  settings  Json      @default("{}")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  users User[]
-  agents Agent[]
-  tools Tool[]
+  users                User[]
+  agents               Agent[]
+  tools                Tool[]
+  agentToolPermissions AgentToolPermission[]
 
   @@map("tenants")
 }
 
 model User {
-  id                String   @id @default(uuid())
-  tenantId          String   @map("tenant_id")
-  email             String   @unique
-  passwordHash      String   @map("password_hash")
-  role              String   @default("member")
-  isVerified        Boolean  @default(false) @map("is_verified")
-  verificationToken String?  @map("verification_token")
-  refreshTokenHash  String?  @map("refresh_token_hash")
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  id                String    @id @default(uuid())
+  tenantId          String    @map("tenant_id")
+  email             String    @unique
+  passwordHash      String    @map("password_hash")
+  role              String    @default("member")
+  isVerified        Boolean   @default(false) @map("is_verified")
+  verificationToken String?   @map("verification_token")
+  refreshTokenHash  String?   @map("refresh_token_hash")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
   deletedAt         DateTime? @map("deleted_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -57,13 +58,13 @@ model Agent {
   updatedAt    DateTime  @updatedAt @map("updated_at")
   lastActiveAt DateTime? @map("last_active_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  permissions AgentToolPermission[]
 
   @@unique([tenantId, name])
   @@index([tenantId]) // even though the composite index can be used for tenantId lookups, this index is added separately around tenantId to improve query performance for lookups cz tenantId based lookup is a common use case
   @@map("agents")
 }
-
 
 model Tool {
   id            String   @id @default(uuid())
@@ -79,9 +80,44 @@ model Tool {
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  permissions AgentToolPermission[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
   @@map("tools")
+}
+
+model AgentToolPermission {
+  id       String  @id @default(uuid())
+  tenantId String  @map("tenant_id")
+  agentId  String  @map("agent_id")
+  toolId   String  @map("tool_id")
+  isActive Boolean @default(true) @map("is_active")
+
+  // ── Phase 2 stub columns ──────────────────────────────────────────
+  // NOT read or enforced by ANY Week 3 code path. They exist now
+  // purely to avoid a schema migration later (PRD §10 already lists
+  // both on this table). Treat a non-null value here as INERT until
+  // the Phase 2 authorization engine (PRD §8) is actually built.
+  // Delete this comment block the day enforcement lands — not
+  // before, or a future reader will assume these are already checked.
+  parameterConstraints Json? @map("parameter_constraints")
+  callBudgetPerHour    Int?  @map("call_budget_per_hour")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  tool   Tool   @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  // agentId and toolId each already belong to exactly one tenant via
+  // their own FK chains — so this pair is already implicitly
+  // tenant-scoped. A duplicate grant for the same (agent, tool) pair
+  // is nonsensical regardless of tenantId, so tenantId doesn't need
+  // to be part of the uniqueness constraint itself.
+  @@unique([agentId, toolId])
+  @@index([tenantId])
+  @@map("agent_tool_permissions")
 }
