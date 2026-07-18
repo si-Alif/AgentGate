@@ -5,7 +5,7 @@ import { prisma } from "../lib/prisma.js";
 import { toolService } from "../services/tool.service.js";
 import { agentService } from "../services/agent.service.js";
 import { toolRepository } from "../repositories/tool.repository.js";
-import { createTestTenant, cleanupTenant } from "./helpers/test-tenant.factory.js";
+import { createTestTenant, cleanupTenant  , createTestTool} from "./helpers/test-tenant.factory.js";
 
 describe("Week 2 — Day 6 Integration Proof Checkpoint (Agents + Tools)", () => {
   let app: FastifyInstance;
@@ -18,15 +18,6 @@ describe("Week 2 — Day 6 Integration Proof Checkpoint (Agents + Tools)", () =>
   afterAll(async () => {
     await app.close();
   });
-
-  async function createTestTool(tenantId: string) {
-    return toolService.createTool(tenantId, {
-      name: `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      handlerType: "web_fetch",
-      handlerConfig: { handlerType: "web_fetch", url: "https://example.com" },
-      inputSchema: { type: "object", properties: {} },
-    });
-  }
 
   // ────────────────────────────────────────────────────────────────
   // GATE 1 — Encryption: ciphertext-not-plaintext + roundtrip
