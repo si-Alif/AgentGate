@@ -13,6 +13,7 @@ import { refreshRoutes } from "./routes/auth/refresh.js";
 import { logoutRoutes } from "./routes/auth/logout.js";
 import { agentRoutes } from "./routes/agents.js";
 import { toolRoutes } from "./routes/tools.js";
+import { permissionRoutes } from "./routes/permissions.js";
 
 import { authenticate } from "./hooks/authenticate.hook.js";
 import { attachTenantContext } from "./hooks/attach-tenant-context.hook.js";
@@ -161,6 +162,7 @@ export async function createApp(): Promise<FastifyInstance> {
 
     await scope.register(agentRoutes, { prefix: "/api/agents" });
     await scope.register(toolRoutes, { prefix: "/api/tools" });
+    await scope.register(permissionRoutes, { prefix: "/api/agents" });
 
   });
 
