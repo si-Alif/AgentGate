@@ -31,6 +31,8 @@ const envSchema = z.object({
   // AGENTGATE_CORS_ORIGIN: z.string().default("http://localhost:5173"),
   // AGENTGATE_DEFAULT_RATE_LIMIT: z.coerce.number().default(60),
 
+  AGENTGATE_DB_POOL_MAX: z.coerce.number().default(10),
+
   // ═══════════════════════════════════════════════════════
   // Week 3 — BullMQ
   // ═══════════════════════════════════════════════════════

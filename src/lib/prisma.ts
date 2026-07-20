@@ -7,12 +7,14 @@ const globalForPrisma = globalThis as unknown as {
 };
 
 
-
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
     // TODO : define max connection pool size
-    adapter: new PrismaPg({ connectionString: env.AGENTGATE_DATABASE_URL }),
+    adapter: new PrismaPg({
+      connectionString: env.AGENTGATE_DATABASE_URL,
+      max : env.AGENTGATE_DB_POOL_MAX,
+    }),
     log: ["error", "warn"],
   });
 
