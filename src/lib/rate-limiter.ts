@@ -1,5 +1,6 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
+import { CircuitBreaker, type BreakState } from "./circuit-breaker.js";
 
 
 export interface RateLimitResult {
@@ -51,6 +52,17 @@ rateLimiterRedis.defineCommand("rateLimitIncr", {
   `,
 });
 
+const rateLimiterCircuitBreaker = new CircuitBreaker({
+  failureThreshold: 3,
+  cooldownMs: 15_000
+})
+
+// Exported so tests and the /health route can both reach it without
+// reimporting internals.
+export function getRateLimiterBreaker(): CircuitBreaker {
+  return rateLimiterCircuitBreaker;
+}
+
 export function rateLimitKey(agentId: string): string {
   const epochMinute = Math.floor(Date.now() / 60_000);
   return `rate:agent:${agentId}:min:${epochMinute}`;
@@ -65,14 +77,38 @@ function evaluateRateLimit(currentCount: number, limit: number): {allowed: boole
 };
 
 export async function checkRateLimit(agentId: string, limit: number): Promise<RateLimitResult> {
-  const key = rateLimitKey(agentId);
-  const currentCount = await rateLimiterRedis.rateLimitIncr(key, RATE_LIMIT_KEY_TTL_SECONDS);
 
-  const { allowed, remaining } = evaluateRateLimit(currentCount, limit);
-
-  return {
-    allowed ,
-    remaining ,
-    degraded : false
+  if (!rateLimiterCircuitBreaker.canAttempt()) {
+    console.warn(`[rate-limiter] circuit OPEN — failing closed for agent ${agentId}`);
+    return { allowed: false, remaining: 0, degraded: true };
   }
+
+  try{
+    const key = rateLimitKey(agentId);
+    const currentCount = await rateLimiterRedis.rateLimitIncr(key, RATE_LIMIT_KEY_TTL_SECONDS);
+
+    const { allowed, remaining } = evaluateRateLimit(currentCount, limit);
+    return {
+      allowed ,
+      remaining ,
+      degraded : false
+    }
+
+  }catch(err){
+    rateLimiterCircuitBreaker.onFailure();
+
+    if (rateLimiterCircuitBreaker.getState() === "OPEN") {
+      console.error(`[rate-limiter] breaker tripped OPEN for agent ${agentId}:`, err);
+      return { allowed: false, remaining: 0, degraded: true };
+    }
+
+    console.warn(`[rate-limiter] degraded — failing open (below trip threshold) for agent ${agentId}:`, err);
+    return { allowed: true, remaining: limit, degraded: true };
+  }
+
 };
+
+export function getRateLimiterHealth(): { healthy: boolean; breakerState: BreakState } {
+  const state = rateLimiterCircuitBreaker.getState();
+  return { healthy: state !== "OPEN", breakerState: state };
+}

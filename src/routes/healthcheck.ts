@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import {  getRateLimiterHealth } from "../lib/rate-limiter.js";
 
 /**
  * Health Check Route
@@ -12,8 +13,10 @@ import type { FastifyInstance } from "fastify";
  *   await fastify.redis.ping()
  */
 export default async function healthRoutes(fastify: FastifyInstance) {
+
   fastify.get("/healthcheck", async () => ({
     status: "ok",
     timestamp: new Date().toISOString(),
+    rateLimiter: getRateLimiterHealth(),
   }));
 }
