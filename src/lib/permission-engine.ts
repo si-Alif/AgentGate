@@ -16,12 +16,12 @@ export type PermissionCheckResult =
 
 
 export async function checkPermission(
-  tenantId: string,
-  agentId: string,
-  toolId: string
+  agentId : string,
+  toolId : string,
+  tenantId : string
 ) : Promise<PermissionCheckResult> {
   try {
-    const permission = await permissionRepository.findGrantWithContext(tenantId, agentId, toolId);
+    const permission = await permissionRepository.findGrantWithContext(agentId, toolId, tenantId);
 
     if (!permission) {
       return { granted: false, reason: "not_found" };
