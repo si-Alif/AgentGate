@@ -37,8 +37,15 @@ export const permissionService = {
     }
   },
 
-  async listPermissions(tenantId: string, agentId: string) {
-    return await permissionRepository.listByAgentId(agentId, tenantId);
+  async listPermissions(
+    tenantId: string,
+    agentId: string,
+    pagination?: { limit: number; offset: number }
+  ) {
+    const options = pagination
+      ? { take: pagination.limit, skip: pagination.offset }
+      : undefined;
+    return await permissionRepository.listByAgentId(agentId, tenantId, options);
   },
 
   async revokePermission(tenantId: string, agentId: string, toolId: string) {

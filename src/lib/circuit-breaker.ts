@@ -14,6 +14,7 @@ export class CircuitBreaker {
   private state : BreakState = "CLOSED";
   private consecutiveFailureCount : number = 0;
   private lastOpenedAt: number | null = null;
+  private probeInFlight : boolean = false;
 
   constructor(private config : CircuitBreakerConfig = DEFAULT_CONFIG) {}
 
@@ -25,18 +26,23 @@ export class CircuitBreaker {
       const elapsed = Date.now() - (this.lastOpenedAt ?? 0);
       if (elapsed >= this.config.cooldownMs) {
         this.state = "HALF_OPEN";
-        return true;
+        this.probeInFlight = false; // reset probe state for the next attempt
+      }else{
+        return false;
       }
-      return false;
     }
 
-    return true; // HALF_OPEN state allows one attempt
+    if (this.probeInFlight) return false; // only allow one probe attempt in HALF_OPEN state
+    this.probeInFlight = true;
+
+    return true;
   }
 
   onSuccess() : void {
     this.consecutiveFailureCount = 0;
     this.state = "CLOSED";
     this.lastOpenedAt = null;
+    this.probeInFlight = false;
   }
 
   // can be closed either on consecutive failures or maybe on failure while the circuit is half open
@@ -46,6 +52,7 @@ export class CircuitBreaker {
       this.state = "OPEN";
       this.lastOpenedAt = Date.now();
     }
+    this.probeInFlight = false; // reset probe state for the next attempt
   }
 
 
@@ -53,10 +60,11 @@ export class CircuitBreaker {
     return this.state;
   }
 
-  // 
+  //
   reset() : void {
     this.state = "CLOSED";
     this.consecutiveFailureCount = 0;
     this.lastOpenedAt = null;
+    this.probeInFlight = false;
   }
 }

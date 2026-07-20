@@ -15,11 +15,14 @@ export const permissionRepository = {
   listByAgentId : (
     agentId : string,
     tenantId : string,
+    {take , skip} : {take : number , skip : number} = {take : 10 , skip : 0} ,
     client : DbClient = prisma
   ) => client.agentToolPermission.findMany(
     {
       where : {agentId , tenantId} ,
-      orderBy : {createdAt : "desc"}
+      orderBy : {createdAt : "desc"},
+      take,
+      skip
     }
   ),
 

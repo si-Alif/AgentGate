@@ -63,10 +63,13 @@ export function getRateLimiterBreaker(): CircuitBreaker {
   return rateLimiterCircuitBreaker;
 }
 
-export function rateLimitKey(agentId: string): string {
+export function rateLimitKey(agentId: string, tenantId?: string): string {
   const epochMinute = Math.floor(Date.now() / 60_000);
+  if (tenantId) {
+    return `rate:tenant:${tenantId}:agent:${agentId}:min:${epochMinute}`;
+  }
   return `rate:agent:${agentId}:min:${epochMinute}`;
-};
+}
 
 
 function evaluateRateLimit(currentCount: number, limit: number): {allowed: boolean, remaining: number} {
@@ -86,6 +89,8 @@ export async function checkRateLimit(agentId: string, limit: number): Promise<Ra
   try{
     const key = rateLimitKey(agentId);
     const currentCount = await rateLimiterRedis.rateLimitIncr(key, RATE_LIMIT_KEY_TTL_SECONDS);
+
+    rateLimiterCircuitBreaker.onSuccess();
 
     const { allowed, remaining } = evaluateRateLimit(currentCount, limit);
     return {
@@ -108,7 +113,40 @@ export async function checkRateLimit(agentId: string, limit: number): Promise<Ra
 
 };
 
-export function getRateLimiterHealth(): { healthy: boolean; breakerState: BreakState } {
+
+export async function checkRateLimitByKey(
+  key: string,
+  limit: number
+): Promise<RateLimitResult> {
+  if (!rateLimiterCircuitBreaker.canAttempt()) {
+    console.warn("[rate-limiter] circuit OPEN — failing closed");
+    return { allowed: false, remaining: 0, degraded: true };
+  }
+
+  const fullKey = `rate:key:${key}:min:${Math.floor(Date.now() / 60_000)}`;
+  try {
+    const currentCount = await rateLimiterRedis.rateLimitIncr(
+      fullKey,
+      RATE_LIMIT_KEY_TTL_SECONDS
+    );
+    rateLimiterCircuitBreaker.onSuccess();
+    const { allowed, remaining } = evaluateRateLimit(currentCount, limit);
+    return { allowed, remaining, degraded: false };
+  } catch (err) {
+    rateLimiterCircuitBreaker.onFailure();
+    if (rateLimiterCircuitBreaker.getState() === "OPEN") {
+      console.error("[rate-limiter] breaker tripped OPEN:", err);
+      return { allowed: false, remaining: 0, degraded: true };
+    }
+    console.warn("[rate-limiter] degraded — failing open (below trip threshold):", err);
+    return { allowed: true, remaining: limit, degraded: true };
+  }
+}
+
+export function getRateLimiterHealth(): {
+  healthy: boolean;
+  breakerState: BreakState;
+}{
   const state = rateLimiterCircuitBreaker.getState();
   return { healthy: state !== "OPEN", breakerState: state };
 }
