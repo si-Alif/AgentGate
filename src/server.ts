@@ -4,6 +4,7 @@ import { emailQueue } from "./queue/email.queue.js";
 import { createEmailWorker } from "./workers/email.worker.js";
 import { redis } from "./lib/redis.js";
 import { prisma } from "./lib/prisma.js";
+import { rateLimiterRedis } from "./lib/rate-limiter.js";
 
 async function startServer() {
   const app = await createApp();
@@ -20,8 +21,9 @@ async function startServer() {
       await app.close();            // 1. stop accepting new HTTP/SSE connections
       await emailWorker.close();    // 2. drain in-flight jobs, stop consuming new ones
       await emailQueue.close();
-      await redis.quit();           // 3. close Redis
-      await prisma.$disconnect();   // 4. close Postgres
+      await rateLimiterRedis.quit(); // 3. close rate limiter Redis
+      await redis.quit();           // 4. close main Redis
+      await prisma.$disconnect();   // 5. close Postgres
       app.log.info("Server closed gracefully.");
       process.exit(0);
     } catch (err) {
