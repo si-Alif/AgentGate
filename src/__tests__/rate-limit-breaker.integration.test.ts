@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   checkRateLimit,
+  checkRateLimitByKey,
   getRateLimiterBreaker,
   rateLimiterRedis,
-  getRateLimiterHealth,
 } from "../lib/rate-limiter.js";
 
-describe("checkRateLimit + CircuitBreaker — integration (Finding #1 fix)", () => {
+describe("checkRateLimit + CircuitBreaker — integration (Finding #1 & #9 fix)", () => {
   beforeEach(() => {
     getRateLimiterBreaker().reset();
     vi.useFakeTimers();
@@ -23,18 +23,18 @@ describe("checkRateLimit + CircuitBreaker — integration (Finding #1 fix)", () 
       .mockRejectedValue(new Error("ECONNREFUSED"));
 
     const r1 = await checkRateLimit("agent-breaker-test", 10);
-    expect(r1).toEqual({ allowed: true, remaining: 10, degraded: true }); // 1st failure — fail open
+    expect(r1).toEqual({ allowed: true, remaining: 10, degraded: true });
 
     const r2 = await checkRateLimit("agent-breaker-test", 10);
-    expect(r2.allowed).toBe(true); // 2nd failure — still below threshold=3
+    expect(r2.allowed).toBe(true);
 
     const r3 = await checkRateLimit("agent-breaker-test", 10);
-    expect(r3.allowed).toBe(false); // 3rd failure trips OPEN → fail closed
+    expect(r3.allowed).toBe(false);
 
     const r4 = await checkRateLimit("agent-breaker-test", 10);
-    expect(r4.allowed).toBe(false); // breaker OPEN → fails closed WITHOUT Redis
+    expect(r4.allowed).toBe(false);
 
-    expect(spy).toHaveBeenCalledTimes(3); // proves the 4th call never touched Redis
+    expect(spy).toHaveBeenCalledTimes(3);
 
     spy.mockRestore();
   });
@@ -66,26 +66,28 @@ describe("checkRateLimit + CircuitBreaker — integration (Finding #1 fix)", () 
     expect(result2.degraded).toBe(false);
     expect(result2.allowed).toBe(true);
 
-    expect(spy).toHaveBeenCalledTimes(5); // 3 failures + 2 successes
+    expect(spy).toHaveBeenCalledTimes(5);
 
     spy.mockRestore();
   });
 
-  it("getRateLimiterHealth() reflects breaker state accurately", () => {
+  it("checkRateLimitByKey uses the same breaker and recovers correctly", async () => {
     const breaker = getRateLimiterBreaker();
+    const spy = vi.spyOn(rateLimiterRedis, "rateLimitIncr");
 
-    breaker.reset();
-    expect(getRateLimiterHealth()).toEqual({
-      healthy: true,
-      breakerState: "CLOSED",
-    });
+    spy.mockRejectedValue(new Error("ECONNREFUSED"));
+    await checkRateLimitByKey("custom-key-1", 10);
+    await checkRateLimitByKey("custom-key-1", 10);
+    await checkRateLimitByKey("custom-key-1", 10);
+    expect(breaker.getState()).toBe("OPEN");
 
-    breaker.onFailure();
-    breaker.onFailure();
-    breaker.onFailure();
-    expect(getRateLimiterHealth()).toEqual({
-      healthy: false,
-      breakerState: "OPEN",
-    });
+    vi.advanceTimersByTime(16_000);
+
+    spy.mockResolvedValue(1);
+    const result = await checkRateLimitByKey("custom-key-1", 10);
+    expect(result.degraded).toBe(false);
+    expect(breaker.getState()).toBe("CLOSED");
+
+    spy.mockRestore();
   });
 });
