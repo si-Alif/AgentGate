@@ -72,7 +72,7 @@ export function rateLimitKey(agentId: string, tenantId?: string): string {
 }
 
 
-function evaluateRateLimit(currentCount: number, limit: number): {allowed: boolean, remaining: number} {
+export function evaluateRateLimit(currentCount: number, limit: number): {allowed: boolean, remaining: number} {
   return {
     allowed: currentCount <= limit,
     remaining : Math.max( 0 , limit - currentCount ),

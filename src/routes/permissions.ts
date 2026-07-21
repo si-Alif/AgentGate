@@ -2,19 +2,10 @@ import type { FastifyInstance } from "fastify";
 import { permissionService, PermissionValidationError } from "../services/permission.service.js";
 import { agentService } from "../services/agent.service.js";
 import { getTenantContext } from "../lib/request-context.js";
+import { checkRateLimitByKey } from "../lib/rate-limiter.js";
 
-/**
- * Registered INSIDE the existing protected scope in app.ts, under the
- * SAME static prefix as agentRoutes ("/api/agents") — these routes
- * define their own ":agentId/permissions" sub-path rather than a
- * parametric register() prefix, mirroring roadmap_w3.md Day 2 Step 4.
- * Do not re-add authenticate/attachTenantContext/requireActiveIdentity
- * hooks here — they're inherited from the parent scope.
- *
- * tenantId is read via getTenantContext(request), not
- * request.tenantContext directly, matching the real accessor pattern
- * established in tools.ts/app.ts.
- */
+
+const uuidProp = { type: "string", format: "uuid" } as const;
 
 const permissionResponseProps = {
   id: { type: "string" },
@@ -23,17 +14,10 @@ const permissionResponseProps = {
   isActive: { type: "boolean" },
   // Phase 2 stub columns (PRD §10) — present in the schema but NOT
   // read or enforced by any Week 3 code path. Always null today.
-  // Kept nullable here so a future non-null Phase 2 write doesn't
-  // break response serialization the day enforcement actually lands.
   parameterConstraints: { type: ["object", "null"] },
   callBudgetPerHour: { type: ["integer", "null"] },
   createdAt: { type: "string", format: "date-time" },
   updatedAt: { type: "string", format: "date-time" },
-  // tenantId is DELIBERATELY omitted — matches the real toolResponseProps
-  // convention in tools.ts (the client already knows its own tenant from
-  // its JWT; fast-json-stringify drops any field not listed here, so the
-  // service can keep returning the raw Prisma row without a dedicated
-  // toPublicPermission() sanitizer).
 } as const;
 
 const permissionRequired = [
@@ -47,6 +31,24 @@ const permissionRequired = [
   "updatedAt",
 ] as const;
 
+/** FINDING 6: Lightweight per-user rate limit for mutation endpoints. */
+async function enforcePermissionRateLimit(
+  request: any,
+  reply: any
+): Promise<boolean> {
+  const { userId } = getTenantContext(request);
+  const rateLimit = await checkRateLimitByKey(`user:${userId}:permissions`, 30);
+  if (!rateLimit.allowed) {
+    reply.status(429).send({
+      statusCode: 429,
+      error: "Too Many Requests",
+      message: "Rate limit exceeded for permission management",
+    });
+    return false;
+  }
+  return true;
+}
+
 export async function permissionRoutes(app: FastifyInstance) {
   app.post(
     "/:agentId/permissions",
@@ -55,12 +57,12 @@ export async function permissionRoutes(app: FastifyInstance) {
         params: {
           type: "object",
           required: ["agentId"],
-          properties: { agentId: { type: "string" } },
+          properties: { agentId: uuidProp },
         },
         body: {
           type: "object",
           required: ["toolId"],
-          properties: { toolId: { type: "string" } },
+          properties: { toolId: uuidProp },
           additionalProperties: false,
         },
         response: {
@@ -73,6 +75,8 @@ export async function permissionRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
+      if (!(await enforcePermissionRateLimit(request, reply))) return;
+
       const { tenantId } = getTenantContext(request);
       const { agentId } = request.params as { agentId: string };
       const { toolId } = request.body as { toolId: string };
@@ -100,7 +104,14 @@ export async function permissionRoutes(app: FastifyInstance) {
         params: {
           type: "object",
           required: ["agentId"],
-          properties: { agentId: { type: "string" } },
+          properties: { agentId: uuidProp },
+        },
+        querystring: {
+          type: "object",
+          properties: {
+            limit: { type: "integer", default: 50, minimum: 1, maximum: 100 },
+            offset: { type: "integer", default: 0, minimum: 0 },
+          },
         },
         response: {
           200: {
@@ -117,21 +128,17 @@ export async function permissionRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { tenantId } = getTenantContext(request);
       const { agentId } = request.params as { agentId: string };
+      const { limit, offset } = request.query as { limit?: number; offset?: number };
 
-      // Explicit existence check rather than letting an unknown or
-      // foreign-tenant agentId silently fall through to "200 []".
-      // listPermissions() only filters agent_tool_permissions by
-      // (agentId, tenantId) — it has no way to distinguish "this
-      // agent exists and has zero grants" from "this agent doesn't
-      // belong to you" on its own. Same collapsing-into-one-response
-      // philosophy as Week 2's agent/tool updateById, applied here
-      // as 404 instead of a misleading empty list.
       const agent = await agentService.getAgent(agentId, tenantId);
       if (!agent) {
         return reply.notFound("Agent not found");
       }
 
-      const result = await permissionService.listPermissions(tenantId, agentId);
+      const result = await permissionService.listPermissions(tenantId, agentId, {
+        limit: limit ?? 50,
+        offset: offset ?? 0,
+      });
       return reply.status(200).send(result);
     }
   );
@@ -144,8 +151,8 @@ export async function permissionRoutes(app: FastifyInstance) {
           type: "object",
           required: ["agentId", "toolId"],
           properties: {
-            agentId: { type: "string" },
-            toolId: { type: "string" },
+            agentId: uuidProp,
+            toolId: uuidProp,
           },
         },
         response: {
@@ -154,15 +161,12 @@ export async function permissionRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
+      if (!(await enforcePermissionRateLimit(request, reply))) return;
+
       const { tenantId } = getTenantContext(request);
       const { agentId, toolId } = request.params as { agentId: string; toolId: string };
       const revoked = await permissionService.revokePermission(tenantId, agentId, toolId);
       if (!revoked) {
-        // Collapses "agent not found", "tool not found", and "no
-        // active grant exists" into one 404 — consistent with
-        // revokePermission()'s own updateMany-count-based check,
-        // which can't distinguish those cases either (Week 2's
-        // established "same response either way" precedent).
         return reply.notFound("Permission grant not found");
       }
       return reply.status(204).send();
