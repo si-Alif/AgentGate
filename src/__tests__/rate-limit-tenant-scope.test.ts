@@ -21,25 +21,36 @@ describe("rateLimitKey — tenant-scoped isolation (Finding #5 fix)", () => {
     expect(keyA).not.toBe(keyB);
   });
 
-  it("checkRateLimit with tenantId scopes the counter independently", async () => {
+  it("checkRateLimit with tenantId scopes the counter independently per tenant", async () => {
     const agentId = `tenant-scope-test-${crypto.randomUUID()}`;
     const tenantA = `tenant-a-${crypto.randomUUID()}`;
     const tenantB = `tenant-b-${crypto.randomUUID()}`;
 
-    // Tenant A uses up 3 of its 5 allowed calls
-    const r1 = await checkRateLimit(agentId, 5);
-    const r2 = await checkRateLimit(agentId, 5);
-    const r3 = await checkRateLimit(agentId, 5);
+    const r1 = await checkRateLimit(agentId, 5, tenantA);
+    const r2 = await checkRateLimit(agentId, 5, tenantA);
+    const r3 = await checkRateLimit(agentId, 5, tenantA);
     expect(r1.remaining).toBe(4);
     expect(r2.remaining).toBe(3);
     expect(r3.remaining).toBe(2);
 
-    // Tenant B should still have all 5 calls available
-    const rB1 = await checkRateLimit(agentId, 5);
+    const rB1 = await checkRateLimit(agentId, 5, tenantB);
+    const rB2 = await checkRateLimit(agentId, 5, tenantB);
     expect(rB1.remaining).toBe(4);
+    expect(rB2.remaining).toBe(3);
 
-    // Tenant A should continue from where it left off
-    const r4 = await checkRateLimit(agentId, 5);
+    const r4 = await checkRateLimit(agentId, 5, tenantA);
     expect(r4.remaining).toBe(1);
+  });
+
+  it("legacy key (no tenantId) is independent from tenant-scoped keys", async () => {
+    const agentId = `legacy-isolation-test-${crypto.randomUUID()}`;
+    const tenantId = `tenant-legacy-${crypto.randomUUID()}`;
+
+    await checkRateLimit(agentId, 5, tenantId);
+    await checkRateLimit(agentId, 5, tenantId);
+    await checkRateLimit(agentId, 5, tenantId);
+
+    const legacy1 = await checkRateLimit(agentId, 5);
+    expect(legacy1.remaining).toBe(4);
   });
 });

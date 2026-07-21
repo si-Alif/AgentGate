@@ -79,40 +79,39 @@ export function evaluateRateLimit(currentCount: number, limit: number): {allowed
   }
 };
 
-export async function checkRateLimit(agentId: string, limit: number): Promise<RateLimitResult> {
-
+export async function checkRateLimit(
+  agentId: string,
+  limit: number,
+  tenantId?: string
+): Promise<RateLimitResult> {
   if (!rateLimiterCircuitBreaker.canAttempt()) {
-    console.warn(`[rate-limiter] circuit OPEN — failing closed for agent ${agentId}`);
+    console.warn("[rate-limiter] circuit OPEN — failing closed");
     return { allowed: false, remaining: 0, degraded: true };
   }
 
-  try{
-    const key = rateLimitKey(agentId);
-    const currentCount = await rateLimiterRedis.rateLimitIncr(key, RATE_LIMIT_KEY_TTL_SECONDS);
+  const key = rateLimitKey(agentId, tenantId);
+  try {
+    const currentCount = await rateLimiterRedis.rateLimitIncr(
+      key,
+      RATE_LIMIT_KEY_TTL_SECONDS
+    );
 
     rateLimiterCircuitBreaker.onSuccess();
 
     const { allowed, remaining } = evaluateRateLimit(currentCount, limit);
-    return {
-      allowed ,
-      remaining ,
-      degraded : false
-    }
-
-  }catch(err){
+    return { allowed, remaining, degraded: false };
+  } catch (err) {
     rateLimiterCircuitBreaker.onFailure();
 
     if (rateLimiterCircuitBreaker.getState() === "OPEN") {
-      console.error(`[rate-limiter] breaker tripped OPEN for agent ${agentId}:`, err);
+      console.error("[rate-limiter] breaker tripped OPEN:", err);
       return { allowed: false, remaining: 0, degraded: true };
     }
 
-    console.warn(`[rate-limiter] degraded — failing open (below trip threshold) for agent ${agentId}:`, err);
+    console.warn("[rate-limiter] degraded — failing open (below trip threshold):", err);
     return { allowed: true, remaining: limit, degraded: true };
   }
-
-};
-
+}
 
 export async function checkRateLimitByKey(
   key: string,
