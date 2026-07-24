@@ -4,7 +4,7 @@ import { checkHostnameSafety, type NetworkSafetyCheckResult } from "./network-sa
 import { SsrfBlockedError, TimeoutError, DNS_TIMEOUT_MS } from "../handlers/types.js";
 
 /**
- * DNS Security Primitive (Week 4, Day 1).
+ * DNS Security Primitive
  *
  * One job: given a hostname, resolve it, validate EVERY candidate
  * address, and return exactly one validated target to connect to.
@@ -19,29 +19,15 @@ export interface ResolvedTarget {
   readonly allResolvedIps: readonly string[];
 }
 
-// Pure — no signal (Decision #7). resolve4/resolve6 can't be
-// meaningfully cancelled once fired regardless of where a signal
-// lives, so putting one here would advertise a capability the
-// resolver doesn't have. Cancellation is owned entirely by
-// resolveAndValidate/assertSafeUrlHost below.
+// after a hostname is resolved array of ip addresses are returned in string format
 export type DnsResolver = (hostname: string) => Promise<readonly string[]>;
 
-// Deliberately separate from DnsResolver (Decision #4): swapping only
-// the resolver does not bypass validation. checkHostnameSafety runs
-// unconditionally on whatever a resolver returns, and correctly,
-// unavoidably classifies 127.0.0.1 as loopback regardless of who
-// produced it — local Postgres/HTTP integration tests inject a
-// permissive VALIDATOR here, never a different resolver alone.
-//
-// NOTE: assumes your real network-safety.ts exports
-// `SafetyCheckResult { safe: boolean; reason?: string }`, matching
-// this document's own §5 type contract. I don't have that file — if
-// its actual field names differ (e.g. `isSafe`), reconcile one way
-// or the other before this compiles against your real codebase.
+
 export type IpValidator = (ip: string) => NetworkSafetyCheckResult;
 
+
 export interface ResolveRequest {
-  hostname: string;    // MUST already be extracted via new URL(input).hostname — see handler call sites (Decision #8)
+  hostname: string;    // MUST already be extracted via new URL(input).hostname
   signal: AbortSignal;
   timeoutMs?: number;  // defaults to DNS_TIMEOUT_MS
 }
@@ -51,32 +37,36 @@ function familyOf(ip: string): 4 | 6 {
 }
 
 /**
- * resolve4()/resolve6() (c-ares), never dns.lookup() — the latter
- * shares libuv's threadpool with argon2's native binding, which runs
- * on every login and every SSE connect (HLD §6.1). A slow or simply
- * unresponsive hostname can stall platform-wide auth otherwise.
- * Verified: a ~15ms lookup ballooned to ~1673ms under a saturated
- * pool; resolve4() stayed ~15.7ms in the identical scenario.
+  - `resolve4()`/`resolve6()` (c-ares), never `dns.lookup()`
+    cz `dns.lookup()` shares **libuv**'s threadpool with argon2's native binding,which runs on every login and every SSE connect .
+  - A slow or simply unresponsive hostname can stall platform-wide auth otherwise.
+
+  - Verified:
+    a ~15ms lookup ballooned to ~1673ms under a saturated pool ;
+    resolve4() stayed ~15.7ms in the identical scenario.
  */
 export const defaultDnsResolver: DnsResolver = async (hostname) => {
+
   const [v4, v6] = await Promise.allSettled([
     dns.resolve4(hostname),
     dns.resolve6(hostname),
   ]);
 
+  // destructure the results of the promises and combine them into a single array of addresses if they are fulfilled
   const addresses = [
     ...(v4.status === "fulfilled" ? v4.value : []),
     ...(v6.status === "fulfilled" ? v6.value : []),
   ];
 
+
   if (addresses.length === 0) {
-    // Preserve *why* both failed — don't discard the underlying
-    // reason (§6.1 step 3).
+
     const v4Reason = v4.status === "rejected" ? (v4.reason?.message ?? String(v4.reason)) : "no A records";
     const v6Reason = v6.status === "rejected" ? (v6.reason?.message ?? String(v6.reason)) : "no AAAA records";
     throw new Error(`DNS returned no addresses for ${hostname} (A: ${v4Reason}; AAAA: ${v6Reason})`);
   }
 
+  // return a unique set of addresses to avoid duplicates
   return [...new Set(addresses)];
 };
 
