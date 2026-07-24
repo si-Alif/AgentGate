@@ -81,4 +81,8 @@ export const handlerConfigSchema = z.discriminatedUnion("handlerType", [
   webFetchHandlerConfigSchema,
 ]);
 
+
+export type HttpHandlerConfig = z.infer<typeof httpHandlerConfigSchema>;
+export type PostgresHandlerConfig = z.infer<typeof postgresHandlerConfigSchema>;
+export type WebFetchHandlerConfig = z.infer<typeof webFetchHandlerConfigSchema>;
 export type HandlerConfig = z.infer<typeof handlerConfigSchema>;
