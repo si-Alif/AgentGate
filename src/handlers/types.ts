@@ -1,4 +1,9 @@
-export type HandlerStatus = "success" | "error" | "timeout" | "payload_too_large";
+export type HandlerStatus =
+  | "success"
+  | "error"
+  | "timeout"
+  | "payload_too_large"
+  | "unsupported_media_type";
 
 export interface HandlerResult{
   status : HandlerStatus;
@@ -46,5 +51,16 @@ export class SsrfBlockedError extends Error {
   ) {
     super(`SSRF blocked: ${hostname} resolves to ${ip} (${reason})`);
     this.name = "SsrfBlockedError";
+  }
+}
+
+export class UnsupportedMediaTypeError extends Error {
+  constructor(
+    public mediaType: string | null,
+  ){
+    super(
+      mediaType === null ? "Missing or unparsable Content-Type header" : `Unsupported media type: ${mediaType}`
+    );
+    this.name = "UnsupportedMediaTypeError";
   }
 }
