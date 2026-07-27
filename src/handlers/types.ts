@@ -41,6 +41,20 @@ export class PayloadTooLargeError extends Error {
   }
 }
 
+export class RowLimitExceededError extends PayloadTooLargeError {
+  constructor(public rowCount: number, limit: number) {
+    super(rowCount, limit);
+    this.name = "RowLimitExceededError";
+  }
+}
+
+export class ByteLimitExceededError extends PayloadTooLargeError {
+  constructor(public byteCount: number, limit: number) {
+    super(byteCount, limit);
+    this.name = "ByteLimitExceededError";
+  }
+}
+
 export class SsrfBlockedError extends Error {
   constructor(
     public hostname: string,
