@@ -17,14 +17,15 @@ export type ToolExecutionErrorCode =
   | "HANDLER_ERROR";
 
 
-export interface HandlerResult{
-  status : HandlerStatus;
-  result ?: any;
-  error ?: string;
+export interface HandlerResult {
+  status: HandlerStatus;
+  result?: any;
+  error?: string;
 }
 
 export interface ExecutionResult extends HandlerResult {
-  durationMs : number ;
+  durationMs: number;
+  errorCode?: ToolExecutionErrorCode;
 }
 
 export const MAX_PAYLOAD_BYTES = 10 * 1024 * 1024; // HTTP handler ceiling
@@ -44,10 +45,10 @@ export class TimeoutError extends Error {
 
 export class PayloadTooLargeError extends Error {
   constructor(
-    public actualBytes : number,
-    public maxBytes : number,
+    public actualBytes: number,
+    public maxBytes: number,
 
-  ){
+  ) {
     super(`Payload too large: ${actualBytes} bytes (max ${maxBytes} bytes)`);
     this.name = "PayloadTooLargeError";
   }
@@ -83,7 +84,7 @@ export class SsrfBlockedError extends Error {
 export class UnsupportedMediaTypeError extends Error {
   constructor(
     public mediaType: string | null,
-  ){
+  ) {
     super(
       mediaType === null ? "Missing or unparsable Content-Type header" : `Unsupported media type: ${mediaType}`
     );

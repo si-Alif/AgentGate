@@ -1,7 +1,7 @@
 import pg from "pg";
 import type { Client as PgClient } from "pg";
 import { assertSafeUrlHost, defaultDnsResolver } from "../lib/dns-security.js";
-import type { DnsResolver } from "../lib/dns-security.js";
+import type { DnsResolver , IpValidator } from "../lib/dns-security.js";
 import {
   createSafePostgresStreamFactory,
   forceTerminateClient,
@@ -28,7 +28,8 @@ export async function executePostgresHandler(
   config: PostgresHandlerConfig,
   inputParams: Record<string, unknown>,
   signal: AbortSignal,
-  resolver: DnsResolver = defaultDnsResolver
+  resolver: DnsResolver = defaultDnsResolver,
+  validate ?: IpValidator
 ): Promise<HandlerResult> {
   let client: PgClient | null = null;
   let forceKilled = false;
@@ -36,7 +37,7 @@ export async function executePostgresHandler(
 
   try {
     const parsed = parsePostgresUrl(config.connectionString);
-    const resolvedTarget = await assertSafeUrlHost({ hostname: parsed.hostname, signal }, resolver);
+    const resolvedTarget = await assertSafeUrlHost({ hostname: parsed.hostname, signal }, resolver, validate);
 
     const useSSL = parsed.sslMode !== "disable" && parsed.sslMode !== "allow";
 

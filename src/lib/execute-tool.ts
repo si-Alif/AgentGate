@@ -42,6 +42,7 @@ export async function executeTool(
       eventType: "TOOL_INVOCATION",
       status: result.status,
       durationMs: result.durationMs,
+      errorCode: result.errorCode,
       timestamp: new Date(),
     };
     if (result.error !== undefined) payload.errorMessage = result.error;
@@ -60,6 +61,7 @@ export async function executeTool(
     const result: ExecutionResult = { status: partial.status, durationMs };
     if (partial.result !== undefined) result.result = partial.result;
     if (partial.error !== undefined) result.error = redactSecrets(partial.error);
+    if (errorCode !== undefined) result.errorCode = errorCode;
 
     audit(result);
     return result;
