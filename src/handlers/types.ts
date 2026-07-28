@@ -5,6 +5,18 @@ export type HandlerStatus =
   | "payload_too_large"
   | "unsupported_media_type";
 
+export type ToolExecutionErrorCode =
+  | "TOOL_NOT_FOUND"
+  | "TOOL_INACTIVE"
+  | "DECRYPTION_FAILED"
+  | "INVALID_HANDLER_CONFIG"
+  | "SSRF_BLOCKED"
+  | "TIMEOUT"
+  | "PAYLOAD_TOO_LARGE"
+  | "UNSUPPORTED_MEDIA_TYPE"
+  | "HANDLER_ERROR";
+
+
 export interface HandlerResult{
   status : HandlerStatus;
   result ?: any;
@@ -78,3 +90,4 @@ export class UnsupportedMediaTypeError extends Error {
     this.name = "UnsupportedMediaTypeError";
   }
 }
+
