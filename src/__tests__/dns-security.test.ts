@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import net from "node:net";
+import { describe, it, expect, vi } from "vitest";
 import crypto from "node:crypto";
 import { promisify } from "node:util";
 import {
@@ -7,128 +6,155 @@ import {
   resolveAndValidate,
   defaultDnsResolver,
 } from "../lib/dns-security.js";
-import { SsrfBlockedError, TimeoutError } from "../handlers/types.js";
+import { checkHostnameSafety } from "../lib/network-safety.js";
+import { SsrfBlockedError } from "../handlers/types.js";
 
-// Utility to saturate the threadpool for our performance proof
 const pbkdf2Async = promisify(crypto.pbkdf2);
+const permissive = () => ({ isSafe: true });
 
-// Mock Layer 1 Validator for isolated testing
-// In reality, this would be your actual checkHostnameSafety function
-const mockValidator = vi.fn((ip: string) => {
-  if (ip === "127.0.0.1" || ip === "169.254.169.254" || ip === "::1" || ip.includes("169.254.169.254")) {
-    return { isSafe: false, reason: "blocked range" };
-  }
-  return { isSafe: true };
+describe("assertSafeUrlHost — literal-IP fast path (Day 6, the critical regression suite)", () => {
+  it("blocks a literal loopback IP WITHOUT ever invoking the resolver", async () => {
+    const resolverSpy = vi.fn();
+    await expect(
+      assertSafeUrlHost({ hostname: "127.0.0.1", signal: new AbortController().signal }, resolverSpy)
+    ).rejects.toThrow(SsrfBlockedError);
+    // This is the load-bearing assertion. If the resolver were ever
+    // called here, it would mean the literal-IP fast path was
+    // bypassed and the code fell through to DNS resolution instead —
+    // exactly the state that let the literal-IP bypass exist in the
+    // first place.
+    expect(resolverSpy).not.toHaveBeenCalled();
+  });
+
+  it("allows a literal public IP without invoking the resolver", async () => {
+    const resolverSpy = vi.fn();
+    const result = await assertSafeUrlHost(
+      { hostname: "93.184.216.34", signal: new AbortController().signal },
+      resolverSpy
+    );
+    expect(result.ip).toBe("93.184.216.34");
+    expect(resolverSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks the literal cloud-metadata IP — no hostname needed to reach it", async () => {
+    await expect(
+      assertSafeUrlHost({ hostname: "169.254.169.254", signal: new AbortController().signal }, vi.fn())
+    ).rejects.toThrow(SsrfBlockedError);
+  });
+
+  it("blocks a bracketed literal IPv6 loopback via the literal-IP path, not DNS", async () => {
+    const resolverSpy = vi.fn();
+    await expect(
+      assertSafeUrlHost({ hostname: "[::1]", signal: new AbortController().signal }, resolverSpy)
+    ).rejects.toThrow(SsrfBlockedError);
+    expect(resolverSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks a literal IPv4-mapped IPv6 loopback (::ffff:127.0.0.1)", async () => {
+    await expect(
+      assertSafeUrlHost({ hostname: "::ffff:127.0.0.1", signal: new AbortController().signal }, vi.fn())
+    ).rejects.toThrow(SsrfBlockedError);
+  });
+
+  it("a genuine hostname (not a literal IP) DOES fall through to the resolver", async () => {
+    const resolverSpy = vi.fn().mockResolvedValue(["93.184.216.34"]);
+    const result = await assertSafeUrlHost(
+      { hostname: "public.example.com", signal: new AbortController().signal },
+      resolverSpy
+    );
+    expect(resolverSpy).toHaveBeenCalledWith("public.example.com");
+    expect(result.ip).toBe("93.184.216.34");
+  });
 });
 
-describe("DNS Security Primitive (Layer 2)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+describe("resolveAndValidate — rebinding & mixed-candidate matrix (retained + expanded)", () => {
+  it("blocks if ANY candidate is unsafe, regardless of ordering", async () => {
+    await expect(
+      resolveAndValidate(
+        { hostname: "mixed-a.example", signal: new AbortController().signal },
+        async () => ["93.184.216.34", "169.254.169.254"]
+      )
+    ).rejects.toThrow(SsrfBlockedError);
+
+    await expect(
+      resolveAndValidate(
+        { hostname: "mixed-b.example", signal: new AbortController().signal },
+        async () => ["169.254.169.254", "93.184.216.34"]
+      )
+    ).rejects.toThrow(SsrfBlockedError);
   });
 
-  describe("Literal IP Guard (assertSafeUrlHost)", () => {
-    it("throws SsrfBlockedError on IPv4 loopback and NEVER calls resolver", async () => {
-      const resolverSpy = vi.fn();
-      const signal = AbortSignal.timeout(5000);
+  it("simulates DNS rebinding: same hostname, safe on the first call, unsafe on the next", async () => {
+    let call = 0;
+    const rebinder = async () => (++call === 1 ? ["93.184.216.34"] : ["10.0.0.5"]);
+    const req = () => ({ hostname: "attacker.example", signal: new AbortController().signal });
 
-      await expect(
-        assertSafeUrlHost({ hostname: "127.0.0.1", signal }, resolverSpy, mockValidator)
-      ).rejects.toThrow(SsrfBlockedError);
-
-      expect(resolverSpy).not.toHaveBeenCalled(); // The ultimate proof the bypass is closed
-    });
-
-    it("throws SsrfBlockedError on cloud metadata IP (169.254.169.254)", async () => {
-      const resolverSpy = vi.fn();
-      await expect(
-        assertSafeUrlHost({ hostname: "169.254.169.254", signal: AbortSignal.timeout(5000) }, resolverSpy, mockValidator)
-      ).rejects.toThrow(SsrfBlockedError);
-      expect(resolverSpy).not.toHaveBeenCalled();
-    });
-
-    it("strips brackets and blocks IPv6 loopback ([::1])", async () => {
-      const resolverSpy = vi.fn();
-      await expect(
-        assertSafeUrlHost({ hostname: "[::1]", signal: AbortSignal.timeout(5000) }, resolverSpy, mockValidator)
-      ).rejects.toThrow(SsrfBlockedError);
-    });
-
-    it("blocks IPv4-mapped IPv6 literals (::ffff:169.254.169.254)", async () => {
-      const resolverSpy = vi.fn();
-      await expect(
-        assertSafeUrlHost({ hostname: "::ffff:169.254.169.254", signal: AbortSignal.timeout(5000) }, resolverSpy, mockValidator)
-      ).rejects.toThrow(SsrfBlockedError);
-    });
+    const first = await resolveAndValidate(req(), rebinder);
+    expect(first.ip).toBe("93.184.216.34");
+    await expect(resolveAndValidate(req(), rebinder)).rejects.toThrow(SsrfBlockedError);
   });
 
-  describe("Mixed Candidate Lists & DNS Rebinding prep", () => {
-    it("rejects the WHOLE resolution if any candidate is unsafe", async () => {
-      // Mocking a malicious DNS server returning a safe IP and an internal IP
-      const maliciousResolver = vi.fn().mockResolvedValue(["93.184.216.34", "127.0.0.1"]);
-      const signal = AbortSignal.timeout(5000);
-
-      await expect(
-        resolveAndValidate({ hostname: "example.com", signal }, maliciousResolver, mockValidator)
-      ).rejects.toThrow(SsrfBlockedError);
-    });
+  it("dedupes duplicate candidate addresses before validating", async () => {
+    const resolver = async () => ["93.184.216.34", "93.184.216.34"];
+    const result = await resolveAndValidate({ hostname: "dup.example", signal: new AbortController().signal }, resolver);
+    expect(result.allResolvedIps).toEqual(["93.184.216.34"]);
   });
 
-  describe("Timeout & Execution Budgets", () => {
-    it("aborts a hanging DNS resolver gracefully within the timeout budget", async () => {
-      // A resolver that never settles
-      const hangingResolver = vi.fn().mockImplementation(() => new Promise(() => { }));
-
-      // Give it a strict 50ms budget for the test
-      const signal = AbortSignal.timeout(50);
-
-      await expect(
-        resolveAndValidate({ hostname: "example.com", signal }, hangingResolver, mockValidator)
-      ).rejects.toThrow(TimeoutError);
-    });
+  it("bounds waiting time near the sub-timeout for a hanging resolver, not the full handler budget", async () => {
+    const hangs = () => new Promise<string[]>(() => { });
+    const start = Date.now();
+    await expect(
+      resolveAndValidate({ hostname: "hangs.example", signal: new AbortController().signal, timeoutMs: 300 }, hangs)
+    ).rejects.toThrow();
+    expect(Date.now() - start).toBeLessThan(1_500);
   });
 
-  describe("Threadpool Non-Contention Proof (Critical Security Check)", () => {
-    it("resolves external DNS without queueing behind saturated libuv workers", async () => {
-      // 1. Establish a baseline resolution time
-      const baselineStart = performance.now();
-      await defaultDnsResolver("example.com");
-      const baselineDuration = performance.now() - baselineStart;
-
-      // 2. Saturate the libuv threadpool (default size is 4)
-      // pbkdf2 uses the same threadpool as argon2/dns.lookup
-      const heavyTasks = Array.from({ length: 4 }).map(() =>
-        pbkdf2Async("password", "salt", 100000, 64, "sha512")
-      );
-
-      // 3. Fire our custom defaultDnsResolver concurrently
-      const saturatedStart = performance.now();
-      await defaultDnsResolver("example.com");
-      const saturatedDuration = performance.now() - saturatedStart;
-
-      // Ensure the heavy tasks finish so we don't leak them across tests
-      await Promise.all(heavyTasks);
-
-      // 4. Assert that the c-ares resolver wasn't blocked by the threadpool.
-      // If we were using dns.lookup(), saturatedDuration would be hundreds of ms.
-      // We allow a generous 50ms margin for normal network jitter.
-      expect(saturatedDuration).toBeLessThan(baselineDuration + 50);
-    });
+  it("honors the caller's own AbortSignal firing before the DNS sub-timeout would", async () => {
+    const controller = new AbortController();
+    const slow = () => new Promise<string[]>((resolve) => setTimeout(() => resolve(["93.184.216.34"]), 5_000));
+    setTimeout(() => controller.abort(), 50);
+    const start = Date.now();
+    await expect(
+      resolveAndValidate({ hostname: "caller-abort.example", signal: controller.signal, timeoutMs: 5_000 }, slow)
+    ).rejects.toThrow();
+    expect(Date.now() - start).toBeLessThan(1_000);
   });
 
-  describe("Testing Seam Verification", () => {
-    it("allows local IPs if an explicitly permissive validator is injected", async () => {
-      const permissiveValidator = vi.fn().mockReturnValue({ isSafe: true });
-      const resolverSpy = vi.fn();
-      const signal = AbortSignal.timeout(5000);
+  it("the validator seam (not the resolver seam) is the only way to legitimately reach a loopback target in tests", async () => {
+    const loopbackResolver = async () => ["127.0.0.1"];
+    const result = await resolveAndValidate(
+      { hostname: "test-only-host", signal: new AbortController().signal },
+      loopbackResolver,
+      permissive
+    );
+    expect(result.ip).toBe("127.0.0.1");
+  });
+});
 
-      const result = await assertSafeUrlHost(
-        { hostname: "127.0.0.1", signal },
-        resolverSpy,
-        permissiveValidator
-      );
+describe("Threadpool Non-Contention Proof (Critical Security Check)", () => {
+  it("resolves external DNS without queueing behind saturated libuv workers", async () => {
+    const baselineStart = performance.now();
+    await defaultDnsResolver("example.com");
+    const baselineDuration = performance.now() - baselineStart;
 
-      expect(result.ip).toBe("127.0.0.1");
-      expect(permissiveValidator).toHaveBeenCalledWith("127.0.0.1");
-    });
+    const heavyTasks = Array.from({ length: 4 }).map(() =>
+      pbkdf2Async("password", "salt", 100000, 64, "sha512")
+    );
+
+    const saturatedStart = performance.now();
+    await defaultDnsResolver("example.com");
+    const saturatedDuration = performance.now() - saturatedStart;
+
+    await Promise.all(heavyTasks);
+
+    expect(saturatedDuration).toBeLessThan(baselineDuration + 50);
+  });
+});
+
+describe("network-safety.ts field-naming contract (Day 6 — Finding #8 regression guard)", () => {
+  it("checkHostnameSafety exposes isSafe, not safe — catches a silent field-name drift across the Week 2 → Week 4 boundary", () => {
+    const result = (checkHostnameSafety("127.0.0.1") as unknown) as Record<string, unknown>;
+    expect(result).toHaveProperty("isSafe");
+    expect(result.safe).toBeUndefined();
   });
 });

@@ -5,6 +5,7 @@ import { createEmailWorker } from "./workers/email.worker.js";
 import { redis } from "./lib/redis.js";
 import { prisma } from "./lib/prisma.js";
 import { rateLimiterRedis } from "./lib/rate-limiter.js";
+import {closeSafeAgent} from "./lib/safe-agent.js"
 
 async function startServer() {
   const app = await createApp();
@@ -24,6 +25,7 @@ async function startServer() {
       await rateLimiterRedis.quit(); // 3. close rate limiter Redis
       await redis.quit();           // 4. close main Redis
       await prisma.$disconnect();   // 5. close Postgres
+      await closeSafeAgent();       // 6. close the shared safe agent
       app.log.info("Server closed gracefully.");
       process.exit(0);
     } catch (err) {

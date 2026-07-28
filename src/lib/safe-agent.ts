@@ -20,3 +20,10 @@ export function getSafeAgent() : Agent {
 
   return sharedSafeAgent;
 }
+
+export async function closeSafeAgent(): Promise<void> {
+  if (sharedSafeAgent) {
+    await sharedSafeAgent.close();
+    sharedSafeAgent = null;
+  }
+}
