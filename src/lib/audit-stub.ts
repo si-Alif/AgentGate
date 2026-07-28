@@ -7,7 +7,7 @@ export interface AuditEventPayload {
   eventType: "TOOL_INVOCATION";
   status: HandlerStatus;
   durationMs: number;
-  errorCode?: ToolExecutionErrorCode;
+  errorCode?: ToolExecutionErrorCode | undefined;
   errorMessage?: string; // already redacted by the time this is populated
   timestamp: Date;
 }
