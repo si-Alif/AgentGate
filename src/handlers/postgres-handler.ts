@@ -1,7 +1,7 @@
 import pg from "pg";
 import type { Client as PgClient } from "pg";
 import { assertSafeUrlHost, defaultDnsResolver } from "../lib/dns-security.js";
-import type { DnsResolver, IpValidator } from "../lib/dns-security.js";
+import type { DnsResolver , IpValidator } from "../lib/dns-security.js";
 import {
   createSafePostgresStreamFactory,
   forceTerminateClient,
@@ -29,7 +29,7 @@ export async function executePostgresHandler(
   inputParams: Record<string, unknown>,
   signal: AbortSignal,
   resolver: DnsResolver = defaultDnsResolver,
-  validate?: IpValidator
+  validate ?: IpValidator
 ): Promise<HandlerResult> {
   let client: PgClient | null = null;
   let forceKilled = false;
@@ -93,17 +93,13 @@ export async function executePostgresHandler(
     // (e.g. an earlier throw) — that's fine, a never-settled/never-
     // observed pending promise doesn't produce an unhandled rejection.
 
-    const connectPromise = client.connect();
-    connectPromise.catch(() => { });          // swallow late rejection on abort
-    await Promise.race([connectPromise, abortPromise]);
+    await Promise.race([client.connect(), abortPromise]);
 
     // Defense-in-depth DB-side backstop — not the primary timeout
     // mechanism (that's the AbortSignal -> forceTerminateClient path
     // above, which works for any caller-supplied budget regardless of
     // this fixed platform constant).
-    const timeoutPromise = client.query(`SET statement_timeout = ${DEFAULT_TIMEOUT_MS}`);
-    timeoutPromise.catch(() => { });          // swallow late rejection on abort
-    await Promise.race([timeoutPromise, abortPromise]);
+    await Promise.race([client.query(`SET statement_timeout = ${DEFAULT_TIMEOUT_MS}`), abortPromise]);
 
     const paramsArray = Array.isArray(inputParams.params) ? (inputParams.params as unknown[]) : [];
 
