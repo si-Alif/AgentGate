@@ -20,6 +20,8 @@ model Tenant {
   agents               Agent[]
   tools                Tool[]
   agentToolPermissions AgentToolPermission[]
+  toolExecutions       ToolExecution[]
+  auditEvents          AuditEvent[]
 
   @@map("tenants")
 }
@@ -120,4 +122,50 @@ model AgentToolPermission {
   @@unique([agentId, toolId])
   @@index([tenantId])
   @@map("agent_tool_permissions")
+}
+
+model ToolExecution {
+  id              String   @id // client generated as both ToolExecution.id and AuditEvent.id will share the same value
+  tenantId        String   @map("tenant_id")
+  agentId         String   @map("agent_id")
+  toolId          String   @map("tool_id")
+  status          String   // success | error | timeout | payload_too_large | denied | rate_limited
+  inputPreview    Json?    @map("input_preview")
+  outputPreview   Json?    @map("output_preview")
+  inputTruncated  Boolean  @default(false) @map("input_truncated")
+  outputTruncated Boolean  @default(false) @map("output_truncated")
+  errorCode       String?  @map("error_code")
+  errorMessage    String?  @map("error_message")
+  durationMs      Int      @map("duration_ms")
+  startedAt       DateTime @map("started_at")
+  completedAt     DateTime @map("completed_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+
+  @@index([tenantId, agentId])
+  @@index([tenantId, toolId])
+  @@index([tenantId, createdAt])
+  @@map("tool_executions")
+}
+
+model AuditEvent {
+  id        String   @id // client generated as both ToolExecution.id and AuditEvent.id will share the same value
+  tenantId  String   @map("tenant_id")
+  agentId   String?  @map("agent_id")
+  userId    String?  @map("user_id")   // unpopulated until a human-action producer exists — PRD §10 stub
+  toolId    String?  @map("tool_id")
+  eventType String   @map("event_type")
+  status    String?
+  payload   Json     // the full validated job payload, for forensic completeness
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt, id])
+  @@index([tenantId, agentId])
+  @@index([tenantId, toolId])
+  @@index([tenantId, eventType])
+  @@map("audit_events")
 }
