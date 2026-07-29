@@ -14,7 +14,7 @@ export function capturePreview(value: unknown, maxBytes: number = AUDIT_PREVIEW_
     return { preview: undefined, truncated: false };
   }
 
-  const redacted = redactSecrets(value as string);
+  const redacted = redactSecrets(value);
   const serialized = JSON.stringify(redacted);
 
   if (Buffer.byteLength(serialized, "utf-8") <= maxBytes) {
