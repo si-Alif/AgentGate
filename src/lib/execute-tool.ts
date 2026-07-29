@@ -1,16 +1,20 @@
+import crypto from "node:crypto";
 import { toolRepository } from "../repositories/tool.repository.js";
 import { decryptConfig } from "./encryption.js";
 import { handlerConfigSchema } from "./handler-config.schema.js";
 import type { HandlerConfig } from "./handler-config.schema.js";
 import { withTimeout } from "./timeout.js";
 import { enqueueAuditEvent } from "./audit-stub.js";
-import type { AuditEventPayload } from "./audit-stub.js";
+// import type { AuditEventPayload } from "./audit-stub.js";
 import { redactSecrets } from "./error-redaction.js";
 import { executeHttpHandler } from "../handlers/http-handler.js";
 import { executePostgresHandler } from "../handlers/postgres-handler.js";
 import { executeWebFetchHandler } from "../handlers/webfetch-handler.js";
 import type { HandlerResult, ExecutionResult, ToolExecutionErrorCode } from "../handlers/types.js";
 import { DEFAULT_TIMEOUT_MS, TimeoutError } from "../handlers/types.js";
+import { capturePreview } from "./audit-preview.js";
+import type { ToolInvocationJobPayload } from "./audit-schema.js";
+
 
 /**
  * The M4 dispatcher (HLD §4.1). Deliberately NO resolver/dispatcher/
@@ -32,20 +36,38 @@ export async function executeTool(
   externalSignal?: AbortSignal,
   timeoutMs: number = DEFAULT_TIMEOUT_MS
 ): Promise<ExecutionResult> {
-  const startedAt = performance.now();
+  const startedAt = new Date();
 
   const audit = (result: ExecutionResult): void => {
-    const payload: AuditEventPayload = {
+
+    const completedAt = new Date();
+    const inputCap = capturePreview(inputParams);
+    const outputCap = capturePreview(result.result);
+
+    const payload: ToolInvocationJobPayload = {
+      id: crypto.randomUUID(), // the shared PK for BOTH tool_executions and audit_events
+      schemaVersion: 1,
+      eventType: "TOOL_INVOCATION",
       tenantId,
       agentId,
       toolId,
-      eventType: "TOOL_INVOCATION",
       status: result.status,
       durationMs: result.durationMs,
-      errorCode: result.errorCode,
-      timestamp: new Date(),
+      startedAt,
+      completedAt,
+      timestamp: completedAt,
+      inputTruncated: inputCap.truncated,
+      outputTruncated: outputCap.truncated,
     };
+
+    if (inputCap.preview !== undefined) payload.inputPreview = inputCap.preview;
+    if (outputCap.preview !== undefined) payload.outputPreview = outputCap.preview;
     if (result.error !== undefined) payload.errorMessage = result.error;
+
+    if ("errorCode" in result && (result as { errorCode?: string }).errorCode !== undefined) {
+      payload.errorCode = (result as { errorCode: ToolExecutionErrorCode | undefined }).errorCode;
+    }
+
     enqueueAuditEvent(payload);
   };
 
@@ -56,7 +78,7 @@ export async function executeTool(
   // it, so there is no path that skips redaction or leaves the audit
   // log unwritten.
   const finish = (partial: HandlerResult, errorCode?: ToolExecutionErrorCode): ExecutionResult => {
-    const durationMs = Math.round(performance.now() - startedAt);
+    const durationMs = Math.round(new Date().getTime() - startedAt.getTime());
 
     const result: ExecutionResult = { status: partial.status, durationMs };
     if (partial.result !== undefined) result.result = partial.result;
