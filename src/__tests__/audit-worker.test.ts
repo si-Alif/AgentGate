@@ -41,25 +41,6 @@ function makeToolInvocationPayload(
   };
 }
 
-function makePayload(overrides: Partial<ToolInvocationJobPayload> = {}): ToolInvocationJobPayload {
-  return {
-    id: crypto.randomUUID(),
-    schemaVersion: 1,
-    eventType: "TOOL_INVOCATION",
-    tenantId: "tenant-1",
-    agentId: "agent-1",
-    toolId: "tool-1",
-    status: "success",
-    durationMs: 10,
-    startedAt: new Date(),
-    completedAt: new Date(),
-    timestamp: new Date(),
-    inputTruncated: false,
-    outputTruncated: false,
-    ...overrides,
-  };
-}
-
 // This codebase's async workers (BullMQ) don't offer a synchronous
 // "wait until processed" hook — tests poll with a bounded timeout
 // rather than sleeping a fixed, possibly-flaky duration.
