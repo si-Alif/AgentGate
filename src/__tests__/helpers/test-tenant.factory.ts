@@ -4,7 +4,7 @@ import { agentService } from "../../services/agent.service.js";
 import { toolService } from "../../services/tool.service.js";
 import { permissionRepository } from "../../repositories/permission.repository.js";
 
-interface TestTenantHandle {
+export interface TestTenantHandle {
   tenantId: string;
   userId: string;
   email: string;
@@ -114,6 +114,22 @@ export interface TestAgentOverrides {
  * tests need a real, valid raw key to connect with — most Week 3
  * callers will only destructure `.agent` and that's fine.
  */
+export interface TestAgentCreationResult{
+  agent: {
+    id: string;
+    tenantId: string;
+    name: string;
+    description: string | null;
+    isActive: boolean;
+    createdBy: string;
+    createdAt: Date;
+    updatedAt: Date;
+    lastActiveAt: Date | null;
+  };
+  apiKey: string;
+}
+
+
 export async function createTestAgent(
   tenantId: string,
   createdBy: string,
@@ -228,7 +244,21 @@ const DEFAULT_HANDLER_CONFIGS: Record<TestToolHandlerType, Record<string, unknow
  * The override slot already covers every future handler-shape need
  * without another signature change.
  */
-export async function createTestTool(tenantId: string, overrides: TestToolOverrides = {}) {
+
+export interface TestToolInterface {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  handlerType: string;
+  inputSchema: unknown;
+  outputSchema: unknown;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export async function createTestTool(tenantId: string, overrides: TestToolOverrides = {}) : Promise<TestToolInterface> {
   const handlerType = overrides.handlerType ?? "web_fetch";
   const handlerConfig = overrides.handlerConfig ?? DEFAULT_HANDLER_CONFIGS[handlerType];
 

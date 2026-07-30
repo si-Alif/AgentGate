@@ -26,4 +26,7 @@ export const auditEventRepository = {
         payload: data.payload as any,
       },
     }),
+
+  findByIds: (ids: string[], tenantId: string, client: DbClient = auditPrisma) =>
+    client.auditEvent.findMany({ where: { id: { in: ids }, tenantId } }),
 };

@@ -15,8 +15,8 @@ export interface CreateToolExecutionInput {
   outputTruncated: boolean;
   inputPreview?: unknown;
   outputPreview?: unknown;
-  errorCode?: string;
-  errorMessage?: string;
+  errorCode?: string | undefined;
+  errorMessage?: string | undefined;
 }
 
 export const toolExecutionRepository = {
