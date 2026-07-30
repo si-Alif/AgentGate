@@ -137,8 +137,8 @@ model ToolExecution {
   errorCode       String?  @map("error_code")
   errorMessage    String?  @map("error_message")
   durationMs      Int      @map("duration_ms")
-  startedAt       DateTime @map("started_at")
-  completedAt     DateTime @map("completed_at")
+startedAt   DateTime  @map("started_at")   @db.Timestamptz(3)
+completedAt DateTime  @map("completed_at") @db.Timestamptz(3)
   createdAt       DateTime @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -159,7 +159,7 @@ model AuditEvent {
   eventType String   @map("event_type")
   status    String?
   payload   Json     // the full validated job payload, for forensic completeness
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
