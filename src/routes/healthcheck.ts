@@ -1,22 +1,22 @@
+// src/routes/healthcheck.ts
 import type { FastifyInstance } from "fastify";
-import {  getRateLimiterHealth } from "../lib/rate-limiter.js";
+import { getRateLimiterHealth } from "../lib/rate-limiter.js";
+import { getAuditHealth } from "../lib/audit-health.js";
 
-/**
- * Health Check Route
- *
- * Always public — no authentication.
- * Used by Docker HEALTHCHECK, Railway/Render uptime monitors,
- * and CI pipeline smoke tests.
- *
- * In Week 8, extend this to check DB and Redis connectivity:
- *   await fastify.db.$queryRaw`SELECT 1`
- *   await fastify.redis.ping()
- */
 export default async function healthRoutes(fastify: FastifyInstance) {
+  fastify.get("/healthcheck", async (request, reply) => {
+    const rateLimiter = getRateLimiterHealth();
+    const audit = await getAuditHealth();
 
-  fastify.get("/healthcheck", async () => ({
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    rateLimiter: getRateLimiterHealth(),
-  }));
+    // Core systems (rate limiter, DB, Redis) determine overall health.
+    // Audit is reported purely for observability (Option A).
+    const isCoreHealthy = rateLimiter.healthy;
+
+    return reply.status(isCoreHealthy ? 200 : 503).send({
+      status: isCoreHealthy ? "ok" : "degraded",
+      timestamp: new Date().toISOString(),
+      rateLimiter,
+      audit,
+    });
+  });
 }

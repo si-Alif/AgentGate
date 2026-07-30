@@ -6,11 +6,15 @@ import { redis } from "./lib/redis.js";
 import { prisma } from "./lib/prisma.js";
 import { rateLimiterRedis } from "./lib/rate-limiter.js";
 import {closeSafeAgent} from "./lib/safe-agent.js"
+import { createAuditWorker } from "./workers/audit.worker.js";
+import { auditQueue, deadLetterAuditQueue } from "./queue/audit.queue.js";
+import { auditPrisma } from "./lib/audit-prisma.js";
+import { withTimeout } from "./lib/timeout.js";
 
 async function startServer() {
   const app = await createApp();
-
   const emailWorker = createEmailWorker();
+  const auditWorker = createAuditWorker();
   // ─────────────────────────────────────────────────────────
   // Graceful shutdown — drains in-flight requests, closes
   // DB connections, and lets BullMQ jobs complete before exit.
@@ -19,13 +23,34 @@ async function startServer() {
   const shutdown = async (signal: string) => {
     app.log.info(`Received ${signal} — initiating graceful shutdown...`);
     try {
-      await app.close();            // 1. stop accepting new HTTP/SSE connections
-      await emailWorker.close();    // 2. drain in-flight jobs, stop consuming new ones
+      await app.close();            // 1. stop new HTTP/SSE
+
+      await emailWorker.close();    // 2. drain email
       await emailQueue.close();
-      await rateLimiterRedis.quit(); // 3. close rate limiter Redis
-      await redis.quit();           // 4. close main Redis
-      await prisma.$disconnect();   // 5. close Postgres
-      await closeSafeAgent();       // 6. close the shared safe agent
+
+      // 3. Bounded audit worker shutdown
+      app.log.info("Draining audit worker...");
+      try {
+        // Gracefully wait up to 3 s for the active job
+        await withTimeout(() => auditWorker.close(), 3000);
+      } catch (err: any) {
+        if (err.name === "TimeoutError") {
+          app.log.warn("Audit worker drain timed out, forcing close...");
+          await auditWorker.close(true);  // safe because of Day 3 idempotency
+        } else {
+          app.log.error(err, "Error closing audit worker");
+        }
+      }
+
+      await auditQueue.close();
+      await deadLetterAuditQueue.close();
+      await auditPrisma.$disconnect(); // dedicated pool
+
+      await rateLimiterRedis.quit(); // 4. rate limiter Redis
+      await redis.quit();            // 5. main Redis (after all BullMQ consumers)
+      await prisma.$disconnect();    // 6. main Postgres
+      await closeSafeAgent();        // 7. outbound HTTP
+
       app.log.info("Server closed gracefully.");
       process.exit(0);
     } catch (err) {
@@ -33,7 +58,6 @@ async function startServer() {
       process.exit(1);
     }
   };
-
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
 
