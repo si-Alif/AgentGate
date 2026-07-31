@@ -32,7 +32,7 @@ const envSchema = z.object({
   // AGENTGATE_DEFAULT_RATE_LIMIT: z.coerce.number().default(60),
 
   AGENTGATE_DB_POOL_MAX: z.coerce.number().default(10),
-  AGENTGATE_AUDIT_DB_POOL_MAX: z.coerce.number().default(5),
+  AGENTGATE_AUDIT_DB_POOL_MAX: z.coerce.number().int().positive().default(5),
   AGENTGATE_AUDIT_PREVIEW_MAX_BYTES: z.coerce.number().default(8192),
 
 

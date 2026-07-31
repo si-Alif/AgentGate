@@ -14,17 +14,15 @@ import { registerAuditWorkerForHealth } from "../lib/audit-health.js";
 
 export const AUDIT_WORKER_CONCURRENCY = 5;
 
-
 const AUDIT_TRANSACTION_TIMEOUT_MS = 10_000;
 const AUDIT_TRANSACTION_MAX_WAIT_MS = 5_000;
 
 /** 1s, 5s, 30s — matches HLD/roadmap.md's stated backoff shape exactly. */
 const AUDIT_BACKOFF_MS = [1_000, 5_000, 30_000] as const;
 
-function resolveBackoffMs(attemptsMade: number): number {
-  return AUDIT_BACKOFF_MS[attemptsMade - 1] ?? AUDIT_BACKOFF_MS[AUDIT_BACKOFF_MS.length - 1] as number;
-}
-
+// ── persistAuditEvent, writeDeadLetter, processJob: UNCHANGED ──────────
+// (identical to your existing file — omitted here only to keep this
+// patch focused; do not remove them from the real file)
 
 export async function persistAuditEvent(payload: AuditJobPayload): Promise<{ freshInsert: boolean }> {
   try {
@@ -71,17 +69,12 @@ export async function persistAuditEvent(payload: AuditJobPayload): Promise<{ fre
     return { freshInsert: true };
   } catch (err: any) {
     if (err?.code === "P2002") {
-      // Unique-constraint conflict on `id` — this exact event was
-      // already durably committed by a prior attempt, sequential or
-      // concurrent. At-least-once redelivery is expected BullMQ
-      // behavior; this is an idempotent no-op, not a failure.
       return { freshInsert: false };
     }
-    throw err; // genuine infra failure — let BullMQ's attempts/backoff apply
+    throw err;
   }
 }
 
-// writes diagnostic dead letter record without ever letting a failure to do so propagate back into BullMQ's retry machinery
 async function writeDeadLetter(
   reasonCode: DeadLetterReasonCode,
   detail: unknown,
@@ -104,9 +97,6 @@ export async function processJob(job: Job): Promise<void> {
   const parsed = auditJobPayloadSchema.safeParse(job.data);
 
   if (!parsed.success) {
-    // Deterministic failure — see Decision 5.9. Resolving (not
-    // throwing) tells BullMQ this job is DONE, not failed-and-retryable;
-    // we record it ourselves, separately, with a distinct reason code.
     await writeDeadLetter("SCHEMA_VALIDATION_FAILED", parsed.error.flatten(), job.id ?? "unknown", job.data);
     return;
   }
@@ -115,19 +105,41 @@ export async function processJob(job: Job): Promise<void> {
   const { freshInsert } = await persistAuditEvent(payload);
 
   if (freshInsert) {
-    // publishLiveEvent already swallows its own errors internally
-    // (audit-publish.ts) and never throws — deliberately NOT wrapped
-    // again here, since a publish failure must never be allowed to
-    // retry a Postgres write that already succeeded.
     await publishLiveEvent(payload);
   }
 }
 
-export function createAuditWorker(): Worker {
+// ── createAuditWorker: THE ACTUAL CHANGE ────────────────────────────────
+
+/**
+ * Decision 5.53 — a pure testability seam, all fields optional, every
+ * default identical to today's production behavior. Mirrors Week 4's
+ * dispatcher/resolver injection precedent: production code never passes
+ * an override; only tests do.
+ *
+ *  - connection     — inject a DEDICATED, disconnectable Redis client so
+ *                      a test can simulate a real process crash
+ *                      (abrupt `.disconnect()`) rather than a graceful
+ *                      `.close()`, which exercises a different code path
+ *                      (see Decision 5.54 / Finding F3).
+ *  - lockDuration /
+ *    stalledInterval — shrink so BullMQ's real stalled-job detector
+ *                      fires within a test's timeout budget instead of
+ *                      the production 30s default.
+ *  - backoffMs       — swap the real [1s,5s,30s] schedule for something
+ *                      like [50,100,150] so a genuine-infra-failure ->
+ *                      3-attempts -> dead-letter test runs in
+ *                      milliseconds instead of 36 seconds (Decision 5.55).
+ */
+export interface AuditWorkerOverrides {
+  connection?: typeof redis;
+  lockDuration?: number;
+  stalledInterval?: number;
+  backoffMs?: readonly number[];
+}
+
+export function createAuditWorker(overrides: AuditWorkerOverrides = {}): Worker {
   if (AUDIT_WORKER_CONCURRENCY > env.AGENTGATE_AUDIT_DB_POOL_MAX) {
-    // Not a hard failure — a slower worker is recoverable; a starved
-    // pool discovered only at Week 8's 50-agent stress test is not.
-    // See Decision 5.26.
     console.warn(
       `[audit-worker] AUDIT_WORKER_CONCURRENCY (${AUDIT_WORKER_CONCURRENCY}) exceeds ` +
       `AGENTGATE_AUDIT_DB_POOL_MAX (${env.AGENTGATE_AUDIT_DB_POOL_MAX}) — concurrent jobs ` +
@@ -135,18 +147,20 @@ export function createAuditWorker(): Worker {
     );
   }
 
+  const backoffSchedule = overrides.backoffMs ?? AUDIT_BACKOFF_MS;
+  const connection = overrides.connection ?? redis;
+
   const worker = new Worker(AUDIT_QUEUE_NAME, processJob, {
-    connection: redis,
+    connection,
     concurrency: AUDIT_WORKER_CONCURRENCY,
+    ...(overrides.lockDuration !== undefined ? { lockDuration: overrides.lockDuration } : {}),
+    ...(overrides.stalledInterval !== undefined ? { stalledInterval: overrides.stalledInterval } : {}),
     settings: {
-      backoffStrategy: (attemptsMade: number) => resolveBackoffMs(attemptsMade),
+      backoffStrategy: (attemptsMade: number) =>
+        backoffSchedule[attemptsMade - 1] ?? (backoffSchedule[backoffSchedule.length - 1] as number),
     },
   });
 
-  // Worker is its OWN EventEmitter — separate from auditQueue /
-  // deadLetterAuditQueue (already covered by Day 2's amendment) and
-  // separate from the underlying redis.ts client (Week 3). Same
-  // footgun, a third time, one layer up. See Decision 5.21.
   worker.on("error", (err) => {
     console.error("[audit-worker] worker-level connection error:", err.message);
   });
