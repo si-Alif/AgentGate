@@ -41,4 +41,11 @@ export const toolRepository = {
   ) => client.tool.updateMany({ where: { id, tenantId }, data: { isActive } }
   ),
 
+  findByName: (name: string, tenantId: string, client: DbClient = prisma) =>
+    client.tool.findUnique({
+      where: {
+        tenantId_name: { tenantId, name },
+      },
+  }),
+
 }
