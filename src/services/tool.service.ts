@@ -1,8 +1,12 @@
+import type { Prisma, } from "@prisma/client";
+
+
 import { toolRepository } from "../repositories/tool.repository.js";
 import { handlerConfigSchema } from "../lib/handler-config.schema.js";
 import { validateJsonSchema } from "../lib/schema-validator.js";
 import { encryptConfig, decryptConfig } from "../lib/encryption.js";
-import type { Prisma, } from "@prisma/client";
+import { invalidateTenantToolsListCache } from "../mcp/tools/tools-list-cache.js";
+
 
 export class ValidationError extends Error {
   constructor(
@@ -111,7 +115,14 @@ export const toolService = {
   },
 
   async deactivateTool(id: string, tenantId: string) {
+
+    // find the tool
     const { count } = await toolRepository.setActiveStatus(id, tenantId, false);
+
+    // for MVP scope , if a tool is deactivated  , we'll remove all the cached permission list for agents under that entire particular tenant instead of trying to find out which agents had a grant to this tool and only remove their cached permission list . This is because the permission table is a join table and we don't have a direct index on toolId to find out which agents had a grant to this tool . So for MVP scope , we'll just remove all the cached permission list for all agents under that tenantId
+    if (count > 0) {
+      await invalidateTenantToolsListCache(tenantId);
+    }
 
     return count > 0;
   }
