@@ -15,6 +15,7 @@ import { agentRoutes } from "./routes/agents.js";
 import { toolRoutes } from "./routes/tools.js";
 import { permissionRoutes } from "./routes/permissions.js";
 import { auditEventRoutes } from "./routes/audit-events.js";
+import { mcpGatewayRoutes } from "./routes/mcp.js";
 
 import { authenticate } from "./hooks/authenticate.hook.js";
 import { attachTenantContext } from "./hooks/attach-tenant-context.hook.js";
@@ -35,6 +36,7 @@ export async function createApp(): Promise<FastifyInstance> {
         ignore: "pid,hostname",
       },
     };
+
   }
 
   const app = Fastify({
@@ -51,6 +53,8 @@ export async function createApp(): Promise<FastifyInstance> {
         useDefaults: true,
       },
     },
+    requestTimeout: env.AGENTGATE_MCP_REQUEST_TIMEOUT_MS,
+    connectionTimeout: env.AGENTGATE_MCP_REQUEST_TIMEOUT_MS,
   });
 
   // ═══════════════════════════════════════════════════════
@@ -172,6 +176,8 @@ export async function createApp(): Promise<FastifyInstance> {
   // Phase 4 — MCP Gateway scope (API key auth) — Week 6
   // Phase 5 — Observability scope (JWT auth, WebSocket) — Week 7
   // ═══════════════════════════════════════════════════════
+
+  await app.register(mcpGatewayRoutes, { prefix: "/mcp" });
 
   return app;
 }
