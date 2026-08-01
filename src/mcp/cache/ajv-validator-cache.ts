@@ -1,4 +1,4 @@
-import {Ajv2020}  from "ajv/dist/2020.js";
+import {Ajv}  from "ajv";
 import type { ValidateFunction } from "ajv/dist/types/index.js";
 import { McpGatewayError } from "../errors/mcp-error-taxonomy.js";
 
@@ -13,7 +13,7 @@ import { McpGatewayError } from "../errors/mcp-error-taxonomy.js";
  *   from the database (each fetch creates a new object reference).
  */
 export class AjvValidatorCache {
-  private readonly ajv: Ajv2020;
+  private readonly ajv: Ajv;
   private readonly cache = new Map<
     string,
     { validate: ValidateFunction; schema: object }
@@ -22,7 +22,7 @@ export class AjvValidatorCache {
 
   constructor(maxSize = 500) {
     this.maxSize = maxSize;
-    this.ajv = new Ajv2020({
+    this.ajv = new Ajv({
       strict: false,
       allErrors: true,
       useDefaults: true,
