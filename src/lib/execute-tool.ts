@@ -188,7 +188,14 @@ function classifyHandlerError(result: HandlerResult): ToolExecutionErrorCode | u
       return "PAYLOAD_TOO_LARGE";
     case "unsupported_media_type":
       return "UNSUPPORTED_MEDIA_TYPE";
+    case "ssrf_blocked":
+      return "SSRF_BLOCKED";
     case "error":
-      return result.error?.startsWith("SSRF blocked") ? "SSRF_BLOCKED" : "HANDLER_ERROR";
+      return "HANDLER_ERROR";
+    default:
+      {
+        const exhaustive: never = result.status;
+        return exhaustive; // compile-time exhaustiveness check
+      }
   }
 }

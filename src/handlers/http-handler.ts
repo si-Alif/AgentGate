@@ -103,8 +103,11 @@ export async function executeHttpHandler(
     if (err instanceof PayloadTooLargeError) {
       return { status: "payload_too_large", error: err.message };
     }
-    if (err instanceof SsrfBlockedError) {
-      return { status: "error", error: err.message };
+    if (err instanceof SsrfBlockedError || err.name === "SsrfBlockedError") {
+      return {
+        status: "ssrf_blocked",
+        error: err.message
+      };
     }
     return { status: "error", error: err.message ?? "Unknown HTTP handler error" };
   }

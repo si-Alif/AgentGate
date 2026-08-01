@@ -25,7 +25,7 @@ const invocationFields = {
 const toolInvocationEventSchema = z.object({
   ...invocationFields,
   eventType: z.literal("TOOL_INVOCATION"),
-  status: z.enum(["success", "error", "timeout", "payload_too_large", "unsupported_media_type"]),
+  status: z.enum(["success", "error", "timeout", "payload_too_large", "unsupported_media_type" , "ssrf_blocked"]),
 });
 
 // STUB — no caller until Week 6 wires checkPermission()'s denial path

@@ -47,7 +47,8 @@ export function mapToolExecutionErrorToError(
       // deactivated") and mapPermissionDenialToError's "tool_inactive"
       // case above — consistent across both mapping tables.
       return McpGatewayError.fromSignal("TOOL_NOT_FOUND", data);
-
+    case "SSRF_BLOCKED":
+      return McpGatewayError.fromSignal("SSRF_BLOCKED", data);
     case "DECRYPTION_FAILED":
     case "INVALID_HANDLER_CONFIG":
     case "HANDLER_ERROR":
@@ -64,8 +65,6 @@ export function mapToolExecutionErrorToError(
       return McpGatewayError.fromSignal("PAYLOAD_TOO_LARGE", data);
     case "UNSUPPORTED_MEDIA_TYPE":
       return McpGatewayError.fromSignal("UNSUPPORTED_MEDIA_TYPE", data);
-    case "SSRF_BLOCKED":
-      return McpGatewayError.fromSignal("SSRF_BLOCKED", data);
 
     default: {
       const exhaustive: never = errorCode;

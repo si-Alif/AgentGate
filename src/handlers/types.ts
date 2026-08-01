@@ -3,7 +3,8 @@ export type HandlerStatus =
   | "error"
   | "timeout"
   | "payload_too_large"
-  | "unsupported_media_type";
+  | "unsupported_media_type"
+  | "ssrf_blocked";
 
 export type ToolExecutionErrorCode =
   | "TOOL_NOT_FOUND"
