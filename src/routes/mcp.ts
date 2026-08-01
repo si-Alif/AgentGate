@@ -7,7 +7,10 @@ import { McpGatewayError, formatMcpErrorResponse } from "../mcp/errors/mcp-error
 import { resolveAgentIdentity } from "../mcp/auth/mcp-auth-resolver.js";
 import { createRequestAbortController } from "../mcp/lifecycle/request-abort.js";
 import { parseApiKey } from "../lib/api-key.js";
+
 import { handleToolsList } from "../mcp/tools/tools-list-handler.js";
+import { handleToolsCall } from "../mcp/tools/tools-call-handler.js";
+
 
 const MESSAGE_RATE_NAMESPACE = "mcp-msg";
 
@@ -32,7 +35,7 @@ function extractRequestId(body: unknown): string | number | null {
 }
 
 export async function mcpGatewayRoutes(app: FastifyInstance) {
-  app.decorateRequest("abortController", null);
+  app.decorateRequest("abortController" , null);
 
   // every response leaving THIS scope is JSON-RPC
   // shaped, including genuinely unexpected exceptions and Fastify's
@@ -94,6 +97,8 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
   });
 
   app.post("/", async (request, reply) => {
+    const requestStart = performance.now();
+
     const shapeResult = jsonRpcEnvelopeShapeSchema.safeParse(request.body);
     if (!shapeResult.success) {
       return reply
@@ -126,6 +131,18 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
         id: requestId,
         result: listResult,
       });
+    }
+
+    if (method === "tools/call") {
+      const mcpNameHeader = request.headers["mcp-name"];
+      const callResult = await handleToolsCall(
+        identity.identity,
+        versionResult.data.params,
+        requestStart,
+        request.abortController!.signal,
+        typeof mcpNameHeader === "string" ? mcpNameHeader : undefined
+      );
+      return reply.status(200).send({ jsonrpc: "2.0", id: requestId, result: callResult });
     }
 
     // Day 4 adds "tools/call" here. Anything else is genuinely unknown.
