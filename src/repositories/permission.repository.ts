@@ -53,6 +53,27 @@ export const permissionRepository = {
       tool : {select : {isActive : true}} ,
       tenant: { select: { deletedAt: true } } // {<field> : true } -> means include this filed in the returned row
     }
-  })
+  }),
+
+  // lists the tools that an active agent inside an active tenant has active permission to use
+  listActiveGrantsForAgent:(
+    agentId :string,
+    tenantId : string,
+    client : DbClient = prisma
+  )=> client.agentToolPermission.findMany({
+    where : {
+      agentId ,
+      tenantId ,
+      isActive : true,
+      agent : {isActive : true} ,
+      tool : {isActive : true} ,
+      tenant: { deletedAt: null }
+    },
+    include :{
+      tool : {select : {name : true , description : true , inputSchema : true}}
+    },
+    //orderBy is deterministic (by tool name) so cache content is stable and easy to assert on in tests, and so two identical underlying grant sets always produce byte-identical cached JSON.
+    orderBy : {tool:{name : "asc"}}
+  }),
 
 }
