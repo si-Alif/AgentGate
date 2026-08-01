@@ -45,6 +45,16 @@ const envSchema = z.object({
   // Week 5 — Audit compliance
   // ═══════════════════════════════════════════════════════
   // AGENTGATE_AUDIT_RETENTION_DAYS: z.coerce.number().default(90),
+
+
+  // add alongside the existing AGENTGATE_ variables
+  AGENTGATE_MCP_ALLOWED_ORIGINS: z
+    .string()
+    .default("")
+    .transform((val) => val.split(",").map((s) => s.trim()).filter(Boolean)),
+  AGENTGATE_MCP_AUTH_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(30),
+  AGENTGATE_MCP_MESSAGE_RATE_LIMIT: z.coerce.number().int().positive().default(120), // coarse, per-minute, pre-auth
+  AGENTGATE_MCP_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(40_000),
 });
 
 

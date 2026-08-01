@@ -63,6 +63,13 @@ export function getRateLimiterBreaker(): CircuitBreaker {
   return rateLimiterCircuitBreaker;
 }
 
+//implementation check for rate limit by key
+
+export function buildNamespacedRateLimitKey(namespace: string, identifier: string): string {
+  const epochMinute = Math.floor(Date.now() / 60_000);
+  return `rate:${namespace}:${identifier}:min:${epochMinute}`;
+}
+
 export function rateLimitKey(agentId: string, tenantId?: string): string {
   const epochMinute = Math.floor(Date.now() / 60_000);
   if (tenantId) {
@@ -71,6 +78,28 @@ export function rateLimitKey(agentId: string, tenantId?: string): string {
   return `rate:agent:${agentId}:min:${epochMinute}`;
 }
 
+async function checkRateLimitForRedisKey(key: string, limit: number): Promise<RateLimitResult> {
+  if (!rateLimiterCircuitBreaker.canAttempt()) {
+    console.warn(`[rate-limiter] circuit OPEN — failing closed for key ${key}`);
+    return { allowed: false, remaining: 0, degraded: true };
+  }
+
+  try {
+    const count = await rateLimiterRedis.rateLimitIncr(key, RATE_LIMIT_KEY_TTL_SECONDS);
+    rateLimiterCircuitBreaker.onSuccess();
+    return { ...evaluateRateLimit(count, limit), degraded: false };
+  } catch (err) {
+    rateLimiterCircuitBreaker.onFailure();
+
+    if (rateLimiterCircuitBreaker.getState() === "OPEN") {
+      console.error(`[rate-limiter] breaker tripped OPEN for key ${key}:`, err);
+      return { allowed: false, remaining: 0, degraded: true };
+    }
+
+    console.warn(`[rate-limiter] degraded — failing open (below trip threshold) for key ${key}:`, err);
+    return { allowed: true, remaining: limit, degraded: true };
+  }
+}
 
 export function evaluateRateLimit(currentCount: number, limit: number): {allowed: boolean, remaining: number} {
   return {
@@ -84,33 +113,9 @@ export async function checkRateLimit(
   limit: number,
   tenantId?: string
 ): Promise<RateLimitResult> {
-  if (!rateLimiterCircuitBreaker.canAttempt()) {
-    console.warn("[rate-limiter] circuit OPEN — failing closed");
-    return { allowed: false, remaining: 0, degraded: true };
-  }
 
-  const key = rateLimitKey(agentId, tenantId);
-  try {
-    const currentCount = await rateLimiterRedis.rateLimitIncr(
-      key,
-      RATE_LIMIT_KEY_TTL_SECONDS
-    );
+  return checkRateLimitForRedisKey(rateLimitKey(agentId, tenantId), limit);
 
-    rateLimiterCircuitBreaker.onSuccess();
-
-    const { allowed, remaining } = evaluateRateLimit(currentCount, limit);
-    return { allowed, remaining, degraded: false };
-  } catch (err) {
-    rateLimiterCircuitBreaker.onFailure();
-
-    if (rateLimiterCircuitBreaker.getState() === "OPEN") {
-      console.error("[rate-limiter] breaker tripped OPEN:", err);
-      return { allowed: false, remaining: 0, degraded: true };
-    }
-
-    console.warn("[rate-limiter] degraded — failing open (below trip threshold):", err);
-    return { allowed: true, remaining: limit, degraded: true };
-  }
 }
 
 export async function checkRateLimitByKey(
@@ -140,6 +145,14 @@ export async function checkRateLimitByKey(
     console.warn("[rate-limiter] degraded — failing open (below trip threshold):", err);
     return { allowed: true, remaining: limit, degraded: true };
   }
+}
+
+export async function checkRateLimitByNameSpace(
+  namespace: string,
+  identifier: string,
+  limit: number
+): Promise<RateLimitResult> {
+  return checkRateLimitForRedisKey(buildNamespacedRateLimitKey(namespace, identifier), limit);
 }
 
 export function getRateLimiterHealth(): {

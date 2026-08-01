@@ -14,6 +14,7 @@ declare module "fastify" {
   interface FastifyRequest {
     tenantContext: TenantContext | null;
     activeUser: ActiveUser | null;
+    abortController: AbortController;
   }
 }
 

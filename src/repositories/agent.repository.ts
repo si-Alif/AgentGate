@@ -68,7 +68,13 @@ export const agentRepository = {
   touchLastActive : (
     id : string,
     client : DbClient = prisma
-  ) => client.agent.update({where : {id} , data : {lastActiveAt : new Date()}})
+  ) => client.agent.update({where : {id} , data : {lastActiveAt : new Date()}}),
+
+  findByKeyIdWithTenantContext: (apiKeyId: string, client: DbClient = prisma) =>
+    client.agent.findFirst({
+      where: { apiKeyId },
+      include: { tenant: { select: { deletedAt: true } } },
+  }),
 
 }
 

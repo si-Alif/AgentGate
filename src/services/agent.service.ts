@@ -1,5 +1,6 @@
 import {agentRepository} from "../repositories/agent.repository.js";
 import {generateApiKey , hashApiKeySecret} from "../lib/api-key.js";
+import { invalidateAgentCache } from "../mcp/auth/mcp-auth-cache.js";
 
 export const agentService = {
   async createAgent(
@@ -71,13 +72,17 @@ export const agentService = {
   async deactivateAgent(id : string, tenantId : string){
     const updateCount = await agentRepository.setActiveStatus(id, tenantId, false);
 
+    if (updateCount.count > 0) {
+      await invalidateAgentCache(id);
+    }
+
     return updateCount.count > 0;
   },
 
   async reactivateAgent(id: string, tenantId: string) {
     const updateCount = await agentRepository.setActiveStatus(id, tenantId, true);
     if (updateCount.count === 0) return null;
-    return this.getAgent(id, tenantId);   
+    return this.getAgent(id, tenantId);
   },
 
   async rotateAgentKey(
@@ -92,6 +97,8 @@ export const agentService = {
     const updateCount = await agentRepository.rotateKey(id, tenantId, {apiKeyId : keyId, apiKeyHash});
 
     if (updateCount.count === 0) return null;
+
+    await invalidateAgentCache(id);
 
     return {
       apiKey : fullKey
