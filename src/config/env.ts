@@ -55,6 +55,7 @@ const envSchema = z.object({
   AGENTGATE_MCP_AUTH_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(30),
   AGENTGATE_MCP_MESSAGE_RATE_LIMIT: z.coerce.number().int().positive().default(120), // coarse, per-minute, pre-auth
   AGENTGATE_MCP_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(40_000),
+  AGENTGATE_MCP_TOOLS_LIST_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(30),
 });
 
 
