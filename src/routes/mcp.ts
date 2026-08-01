@@ -7,6 +7,7 @@ import { McpGatewayError, formatMcpErrorResponse } from "../mcp/errors/mcp-error
 import { resolveAgentIdentity } from "../mcp/auth/mcp-auth-resolver.js";
 import { createRequestAbortController } from "../mcp/lifecycle/request-abort.js";
 import { parseApiKey } from "../lib/api-key.js";
+import { handleToolsList } from "../mcp/tools/tools-list-handler.js";
 
 const MESSAGE_RATE_NAMESPACE = "mcp-msg";
 
@@ -17,9 +18,7 @@ function deriveCoarseRateLimitKey(request: FastifyRequest): string {
     const parsed = parseApiKey(authHeader.slice("Bearer ".length).trim());
     if (parsed) identity = `keyid:${parsed.keyId}`;
   }
-  // Decision 2.10 — Mcp-Method, when present, buckets the coarse limit
-  // per method so a flood of tools/call can't starve a legitimate
-  // tools/list from the SAME agent. Absent header -> one shared bucket.
+
   const method = request.headers["mcp-method"];
   return typeof method === "string" ? `${identity}:${method}` : identity;
 }
@@ -35,7 +34,7 @@ function extractRequestId(body: unknown): string | number | null {
 export async function mcpGatewayRoutes(app: FastifyInstance) {
   app.decorateRequest("abortController", null);
 
-  // Decision 2.8 — every response leaving THIS scope is JSON-RPC
+  // every response leaving THIS scope is JSON-RPC
   // shaped, including genuinely unexpected exceptions and Fastify's
   // own body-parser failures. Distinct from app.ts's REST-scoped
   // handler; Fastify's plugin encapsulation makes this safe.
@@ -43,8 +42,12 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
     request.log.error({ err: error }, "Unhandled error in MCP gateway");
     const requestId = extractRequestId(request.body);
 
+    if (error instanceof McpGatewayError) {
+      return reply.status(200).send(formatMcpErrorResponse(error, requestId));
+    }
+
     if (error.statusCode !== undefined && error.statusCode < 500) {
-      // A client-side failure Fastify itself rejected before our own
+      // A client-side failure Fastify itself rejected before the
       // envelope validation ran (malformed JSON, unsupported
       // content-type, oversized body, etc.).
       return reply
@@ -57,7 +60,7 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
       .send(formatMcpErrorResponse(McpGatewayError.fromSignal("INTERNAL_ERROR"), requestId));
   });
 
-  // Decision 2.6/F6 — Origin + coarse rate-limit are header-only checks;
+  // Origin + coarse rate-limit are header-only checks;
   // they run BEFORE Fastify's JSON body parser, so a rejected request
   // never pays the cost of body parsing at all.
   app.addHook("onRequest", async (request, reply) => {
@@ -74,8 +77,6 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
     const result = await checkRateLimitByNameSpace(MESSAGE_RATE_NAMESPACE, key, env.AGENTGATE_MCP_MESSAGE_RATE_LIMIT);
 
     if (!result.allowed) {
-      // Decision 2.2/F2 — degraded infra is NEVER reported as a policy
-      // denial.
       if (result.degraded) {
         return reply
           .status(503)
@@ -116,14 +117,21 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
         .send(formatMcpErrorResponse(McpGatewayError.fromSignal("IDENTITY_INVALID"), requestId));
     }
 
-    // Day 3 wires tools/list; Day 4 wires tools/call. Both consume
-    // identity.identity.{agentId,tenantId} and request.abortController,
-    // both fully ready as of today.
-    return reply.status(200).send({
-      jsonrpc: "2.0",
-      id: requestId,
-      result: { _placeholder: "identity resolved — Day 3/4 continue the pipeline" },
-    });
+    const method = versionResult.data.method;
+
+    if (method === "tools/list") {
+      const listResult = await handleToolsList(identity.identity);
+      return reply.status(200).send({
+        jsonrpc: "2.0",
+        id: requestId,
+        result: listResult,
+      });
+    }
+
+    // Day 4 adds "tools/call" here. Anything else is genuinely unknown.
+    return reply
+      .status(200)
+      .send(formatMcpErrorResponse(McpGatewayError.fromSignal("METHOD_NOT_FOUND"), requestId));
   });
 
   app.get("/", async (_request, reply) => {
