@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { ZodError } from "zod";
 import { toolRepository } from "../repositories/tool.repository.js";
 import { decryptConfig } from "./encryption.js";
 import { handlerConfigSchema } from "./handler-config.schema.js";
@@ -14,7 +15,6 @@ import type { HandlerResult, ExecutionResult, ToolExecutionErrorCode } from "../
 import { DEFAULT_TIMEOUT_MS, TimeoutError } from "../handlers/types.js";
 import { capturePreview } from "./audit-preview.js";
 import type { ToolInvocationJobPayload } from "./audit-schema.js";
-
 
 /**
  * The M4 dispatcher (HLD §4.1). Deliberately NO resolver/dispatcher/
@@ -40,7 +40,6 @@ export async function executeTool(
   const startedAt = new Date();
 
   const audit = (result: ExecutionResult): void => {
-
     const completedAt = new Date();
     const inputCap = capturePreview(inputParams);
     const outputCap = capturePreview(result.result);
@@ -127,6 +126,14 @@ export async function executeTool(
       config = handlerConfigSchema.parse(JSON.parse(plaintext));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+
+      // Layer 1's SSRF checks (checkHttpUrlSafety / checkPostgresConnectionStringSafety)
+      // are embedded in this schema via superRefine and re-run on EVERY execution.
+      // A rejection caused by one of THOSE checks is semantically an SSRF block, not a malformed-config error.
+      if (err instanceof ZodError && err.issues.some((i: any) => i.params?.ssrfBlocked)) {
+        return finish({ status: "error", error: `Handler config rejected: ${message}` }, "SSRF_BLOCKED");
+      }
+
       return finish({ status: "error", error: `Invalid handler config: ${message}` }, "INVALID_HANDLER_CONFIG");
     }
 

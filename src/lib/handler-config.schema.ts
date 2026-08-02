@@ -11,7 +11,6 @@ const FORBIDDEN_HEADER_NAMES = new Set([
 
 const CRLF_PATTERN = /[\r\n]/;
 
-
 const safeHeaders = z
   .record(z.string(), z.string())
   .optional()
@@ -35,7 +34,11 @@ const safeHttpUrl = z
   .superRefine((url, ctx) => {
     const result = checkHttpUrlSafety(url);
     if (!result.isSafe) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: result.reason ?? "URL target is not allowed" });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.reason ?? "URL target is not allowed",
+        params: { ssrfBlocked: true }
+      });
     }
   });
 
@@ -46,7 +49,11 @@ const safeConnectionString = z
   .superRefine((cs, ctx) => {
     const result = checkPostgresConnectionStringSafety(cs);
     if (!result.isSafe) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: result.reason ?? "connection target is not allowed" });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.reason ?? "connection target is not allowed",
+        params: { ssrfBlocked: true }
+      });
     }
   });
 
@@ -60,6 +67,7 @@ export const httpHandlerConfigSchema = z
   })
   .strict();
 
+// ... (Rest of the file remains unchanged)
 export const postgresHandlerConfigSchema = z
   .object({
     handlerType: z.literal("postgres"),
