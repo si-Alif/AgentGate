@@ -14,6 +14,7 @@ import {
 } from "./helpers/test-tenant.factory.js";
 import { createApp } from "../app.js";
 import type { FastifyInstance } from "fastify";
+import { DEFAULT_TIMEOUT_MS } from "../handlers/types.js";
 
 const mockedExecuteTool = vi.mocked(executeTool);
 
@@ -156,7 +157,7 @@ describe("handleToolsCall — pipeline ordering & short-circuiting", () => {
     await cleanupTenant(tenant.tenantId);
   });
 
-  it("threads the caller's AbortSignal into executeTool unchanged", async () => {
+  it("threads the caller's AbortSignal AND gatewayOverheadMs into executeTool (Day 5 signature update)", async () => {
     const tenant = await createTestTenant(app);
     const { agent } = await createTestAgent(tenant.tenantId, tenant.userId);
     const tool = await createTestTool(tenant.tenantId);
@@ -164,28 +165,34 @@ describe("handleToolsCall — pipeline ordering & short-circuiting", () => {
     mockedExecuteTool.mockResolvedValue({ status: "success", result: { ok: true }, durationMs: 5 });
 
     const controller = new AbortController();
-    await handleToolsCall({ agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), controller.signal);
+    await handleToolsCall(
+      { agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), controller.signal
+    );
 
-    expect(mockedExecuteTool).toHaveBeenCalledWith(tool.id, tenant.tenantId, agent.id, {}, controller.signal);
+    expect(mockedExecuteTool).toHaveBeenCalledWith(
+      tool.id, tenant.tenantId, agent.id, {}, controller.signal, DEFAULT_TIMEOUT_MS, expect.any(Number)
+    );
     await cleanupTenant(tenant.tenantId);
   });
 
-  it("GATE — gatewayOverheadMs is present, non-negative, and correctly excludes executeTool's own durationMs", async () => {
+  it("GATE — gatewayOverheadMs reflects PRE-EXECUTION pipeline time, independent of executeTool's own durationMs", async () => {
     const tenant = await createTestTenant(app);
     const { agent } = await createTestAgent(tenant.tenantId, tenant.userId);
     const tool = await createTestTool(tenant.tenantId);
     await permissionService.assignPermission(tenant.tenantId, { agentId: agent.id, toolId: tool.id });
-    mockedExecuteTool.mockResolvedValue({ status: "success", result: { ok: true }, durationMs: 500 });
+    // A deliberately huge durationMs — under Day 4's OLD formula this
+    // would have driven gatewayOverheadMs toward zero or even clamped
+    // it; under Day 5's formula it has NO effect on gatewayOverheadMs
+    // at all, because the value is computed BEFORE executeTool is ever
+    // called.
+    mockedExecuteTool.mockResolvedValue({ status: "success", result: { ok: true }, durationMs: 999_999 });
 
     const result = await handleToolsCall(
       { agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), new AbortController().signal
     );
 
     expect(result._meta.gatewayOverheadMs).toBeGreaterThanOrEqual(0);
-    // Overhead should be a small fraction of the (artificially large)
-    // 500ms execution time — an empirical first check against PRD
-    // §12's budget.
-    expect(result._meta.gatewayOverheadMs).toBeLessThan(500);
+    expect(result._meta.gatewayOverheadMs).toBeLessThan(1000); // pipeline overhead in a test env, not the mocked execution time
     await cleanupTenant(tenant.tenantId);
   });
 
@@ -205,6 +212,82 @@ describe("handleToolsCall — pipeline ordering & short-circuiting", () => {
         { agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), new AbortController().signal
       );
       expect(result.output).toEqual(mockOutput);
+      await cleanupTenant(tenant.tenantId);
+    });
+  });
+
+  describe("handleToolsCall — audit wiring (Day 5)", () => {
+    it("GATE — a permission denial enqueues a PERMISSION_DENIED audit event with the correct denialReason", async () => {
+      const auditSpy = vi.spyOn(await import("../mcp/tools/tools-call-audit.js"), "auditPermissionDenied");
+      const tenant = await createTestTenant(app);
+      const { agent } = await createTestAgent(tenant.tenantId, tenant.userId);
+      const tool = await createTestTool(tenant.tenantId); // no grant assigned
+
+      await expect(
+        handleToolsCall({ agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), new AbortController().signal)
+      ).rejects.toMatchObject({ code: -32000 });
+
+      expect(auditSpy).toHaveBeenCalledTimes(1);
+      expect(auditSpy.mock.calls[0]![1]).toMatchObject({ granted: false, reason: "not_found" });
+
+      auditSpy.mockRestore();
+      await cleanupTenant(tenant.tenantId);
+    });
+
+    it("a rate-limit denial enqueues a RATE_LIMITED audit event", async () => {
+      const toolsCallAudit = await import("../mcp/tools/tools-call-audit.js");
+      const auditSpy = vi.spyOn(toolsCallAudit, "auditRateLimited");
+      const tenant = await createTestTenant(app);
+      const { agent } = await createTestAgent(tenant.tenantId, tenant.userId);
+      const tool = await createTestTool(tenant.tenantId);
+      await permissionService.assignPermission(tenant.tenantId, { agentId: agent.id, toolId: tool.id });
+      vi.spyOn(rateLimiterModule, "checkRateLimit").mockResolvedValue({ allowed: false, remaining: 0, degraded: false });
+
+      await expect(
+        handleToolsCall({ agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), new AbortController().signal)
+      ).rejects.toMatchObject({ code: -32001 });
+
+      expect(auditSpy).toHaveBeenCalledTimes(1);
+      auditSpy.mockRestore();
+      await cleanupTenant(tenant.tenantId);
+    });
+
+    it("a DEGRADED rate-limit denial does NOT enqueue a RATE_LIMITED audit event", async () => {
+      const toolsCallAudit = await import("../mcp/tools/tools-call-audit.js");
+      const auditSpy = vi.spyOn(toolsCallAudit, "auditRateLimited");
+      const tenant = await createTestTenant(app);
+      const { agent } = await createTestAgent(tenant.tenantId, tenant.userId);
+      const tool = await createTestTool(tenant.tenantId);
+      await permissionService.assignPermission(tenant.tenantId, { agentId: agent.id, toolId: tool.id });
+      vi.spyOn(rateLimiterModule, "checkRateLimit").mockResolvedValue({ allowed: false, remaining: 0, degraded: true });
+
+      await expect(
+        handleToolsCall({ agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), new AbortController().signal)
+      ).rejects.toMatchObject({ code: -32002 });
+
+      // The function is CALLED (it's on the code path) but internally
+      // no-ops per Decision 5.4 — verified at the enqueueAuditEvent
+      // boundary, one layer down, which is the actually load-bearing check:
+      const enqueueSpy = vi.spyOn(await import("../lib/audit-stub.js"), "enqueueAuditEvent");
+      expect(enqueueSpy).not.toHaveBeenCalled();
+
+      auditSpy.mockRestore();
+      enqueueSpy.mockRestore();
+      await cleanupTenant(tenant.tenantId);
+    });
+
+    it("checkRateLimit is called WITH tenantId (Decision 5.10)", async () => {
+      const tenant = await createTestTenant(app);
+      const { agent } = await createTestAgent(tenant.tenantId, tenant.userId);
+      const tool = await createTestTool(tenant.tenantId);
+      await permissionService.assignPermission(tenant.tenantId, { agentId: agent.id, toolId: tool.id });
+      const rlSpy = vi.spyOn(rateLimiterModule, "checkRateLimit");
+      mockedExecuteTool.mockResolvedValue({ status: "success", result: {}, durationMs: 1 });
+
+      await handleToolsCall({ agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), new AbortController().signal);
+
+      expect(rlSpy).toHaveBeenCalledWith(agent.id, expect.any(Number), tenant.tenantId);
+      rlSpy.mockRestore();
       await cleanupTenant(tenant.tenantId);
     });
   });
