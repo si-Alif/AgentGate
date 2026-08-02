@@ -118,6 +118,8 @@ export async function getAuditEventDetail(
     });
   }
 
+  const gatewayOverheadMs = (event.payload as { gatewayOverheadMs?: number } | null)?.gatewayOverheadMs;
+
   return {
     id: event.id,
     tenantId: event.tenantId,
@@ -139,6 +141,7 @@ export async function getAuditEventDetail(
         errorMessage: execution.errorMessage
           ? execution.errorMessage.substring(0, ERROR_CAP_DETAIL)
           : null,
+        ...(gatewayOverheadMs !== undefined ? { gatewayOverheadMs } : {}),
       }
       : {
         // Non‑invocation event: expose raw payload for forensic completeness

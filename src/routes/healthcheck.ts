@@ -17,6 +17,7 @@ export default async function healthRoutes(fastify: FastifyInstance) {
       timestamp: new Date().toISOString(),
       rateLimiter,
       audit,
+      mcpGatewayCache : rateLimiter,
     });
   });
 }
