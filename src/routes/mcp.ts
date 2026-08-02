@@ -91,9 +91,21 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
     }
   });
 
-  app.addHook("preHandler", async (request) => {
+  app.addHook("preHandler", async (request, reply) => {
     if (request.method !== "POST") return;
-    request.abortController = createRequestAbortController(request);
+    const controller = new AbortController();
+
+    // Listen to reply.raw (the socket connection) instead of request.raw.
+    // request.raw "close" fires prematurely as soon as the request body finishes uploading.
+    reply.raw.once("close", () => {
+      // If the socket closes and the response hasn't been sent or finished yet,
+      // the client disconnected prematurely mid-flight.
+      if (!reply.sent && !reply.raw.writableEnded) {
+        controller.abort();
+      }
+    });
+
+    request.abortController = controller;
   });
 
   app.post("/", async (request, reply) => {

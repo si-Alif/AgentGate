@@ -15,7 +15,9 @@ import type { FastifyRequest } from "fastify";
 export function createRequestAbortController(request: FastifyRequest): AbortController {
   const controller = new AbortController();
   request.raw.once("close", () => {
-    controller.abort();
+    if (request.raw.aborted) {
+      controller.abort();
+    }
   });
   return controller;
 }
