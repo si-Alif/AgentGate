@@ -98,6 +98,7 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
 
   app.post("/", async (request, reply) => {
     const requestStart = performance.now();
+    const requestReceivedAt = new Date();
 
     const shapeResult = jsonRpcEnvelopeShapeSchema.safeParse(request.body);
     if (!shapeResult.success) {
@@ -140,7 +141,8 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
         versionResult.data.params,
         requestStart,
         request.abortController!.signal,
-        typeof mcpNameHeader === "string" ? mcpNameHeader : undefined
+        typeof mcpNameHeader === "string" ? mcpNameHeader : undefined,
+        requestReceivedAt
       );
       return reply.status(200).send({ jsonrpc: "2.0", id: requestId, result: callResult });
     }

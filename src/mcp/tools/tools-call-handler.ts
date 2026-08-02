@@ -1,3 +1,4 @@
+import { env } from "../../config/env.js";
 import { toolRepository } from "../../repositories/tool.repository.js";
 import { checkPermission } from "../../lib/permission-engine.js";
 import { checkRateLimit } from "../../lib/rate-limiter.js";
@@ -6,18 +7,16 @@ import { globalValidatorCache } from "../cache/ajv-validator-cache.js";
 import { toolsCallParamsSchema } from "./tools-call-params.schema.js";
 import { mapPermissionDenialToError, mapToolExecutionErrorToError } from "./tools-call-error-mapping.js";
 import { McpGatewayError } from "../errors/mcp-error-taxonomy.js";
-import { env } from "../../config/env.js";
+import {DEFAULT_TIMEOUT_MS} from "../../handlers/types.js";
+import {auditPermissionDenied , auditRateLimited} from "./tools-call-audit.js";
+
+import type {ToolCallAuditContext} from "./tools-call-audit.js";
 import type { ResolvedIdentity } from "../auth/mcp-auth-resolver.js";
 
 export interface ToolsCallResult {
   output: unknown;
   durationMs: number;
   _meta: { gatewayOverheadMs: number };
-}
-
-function computeGatewayOverheadMs(requestStart: number, executionDurationMs: number): number {
-  const totalMs = performance.now() - requestStart;
-  return Math.max(0, Math.round(totalMs - executionDurationMs));
 }
 
 /**
@@ -35,7 +34,8 @@ export async function handleToolsCall(
   rawParams: unknown,
   requestStart: number,
   abortSignal: AbortSignal,
-  mcpNameHeader?: string
+  mcpNameHeader?: string,
+  requestReceivedAt : Date = new Date()
 ): Promise<ToolsCallResult> {
   const parsedParams = toolsCallParamsSchema.safeParse(rawParams);
   if (!parsedParams.success) {
@@ -56,9 +56,19 @@ export async function handleToolsCall(
     throw McpGatewayError.fromSignal("TOOL_NOT_FOUND", { name });
   }
 
+  const auditContext: ToolCallAuditContext = {
+    tenantId: identity.tenantId,
+    agentId: identity.agentId,
+    toolId: tool.id,
+    toolArguments,
+    requestReceivedAt,
+    requestStart
+  };
+
 
   const permissionResult = await checkPermission(identity.agentId, tool.id, identity.tenantId);
   if (!permissionResult.granted) {
+    auditPermissionDenied(auditContext, permissionResult);
     throw mapPermissionDenialToError(permissionResult);
   }
 
@@ -79,22 +89,25 @@ export async function handleToolsCall(
     });
   }
 
-  const rateLimitResult = await checkRateLimit(identity.agentId, env.AGENTGATE_MCP_TOOL_CALL_RATE_LIMIT);
+  const rateLimitResult = await checkRateLimit(identity.agentId, env.AGENTGATE_MCP_TOOL_CALL_RATE_LIMIT , identity.tenantId);
   if (!rateLimitResult.allowed) {
+    auditRateLimited(auditContext, rateLimitResult);
     throw McpGatewayError.fromSignal(rateLimitResult.degraded ? "SERVICE_DEGRADED" : "RATE_LIMITED", {
       remaining: rateLimitResult.remaining,
     });
   }
+
+  const gatewayOverheadMs = Math.max(0, Math.round(performance.now() - requestStart));
 
   const executionResult = await executeTool(
     tool.id,
     identity.tenantId,
     identity.agentId,
     toolArguments,
-    abortSignal
+    abortSignal,
+    DEFAULT_TIMEOUT_MS,
+    gatewayOverheadMs
   );
-
-  const gatewayOverheadMs = computeGatewayOverheadMs(requestStart, executionResult.durationMs);
 
   if (executionResult.status !== "success") {
     throw mapToolExecutionErrorToError(executionResult.errorCode ?? "HANDLER_ERROR", executionResult.error);

@@ -26,6 +26,7 @@ const toolInvocationEventSchema = z.object({
   ...invocationFields,
   eventType: z.literal("TOOL_INVOCATION"),
   status: z.enum(["success", "error", "timeout", "payload_too_large", "unsupported_media_type" , "ssrf_blocked"]),
+  gatewayOverheadMs : z.number().int().nonnegative().optional(),
 });
 
 // STUB — no caller until Week 6 wires checkPermission()'s denial path
@@ -64,6 +65,8 @@ export const auditJobPayloadSchema = z.discriminatedUnion("eventType", [
 export type AuditJobPayload = z.infer<typeof auditJobPayloadSchema>;
 export type ToolInvocationJobPayload = z.infer<typeof toolInvocationEventSchema>;
 
+export type PermissionDeniedJobPayload = z.infer<typeof permissionDeniedEventSchema>;
+export type RateLimitedJobPayload = z.infer<typeof rateLimitedEventSchema>;
 
 export const INVOCATION_EVENT_TYPES = ["TOOL_INVOCATION", "PERMISSION_DENIED", "RATE_LIMITED"] as const;
 

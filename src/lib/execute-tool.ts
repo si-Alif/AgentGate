@@ -34,7 +34,8 @@ export async function executeTool(
   agentId: string,
   inputParams: Record<string, unknown>,
   externalSignal?: AbortSignal,
-  timeoutMs: number = DEFAULT_TIMEOUT_MS
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  gatewayOverheadMs?: number
 ): Promise<ExecutionResult> {
   const startedAt = new Date();
 
@@ -66,6 +67,10 @@ export async function executeTool(
 
     if ("errorCode" in result && (result as { errorCode?: string }).errorCode !== undefined) {
       payload.errorCode = (result as { errorCode: ToolExecutionErrorCode | undefined }).errorCode;
+    }
+
+    if (gatewayOverheadMs !== undefined) {
+      payload.gatewayOverheadMs = gatewayOverheadMs;
     }
 
     enqueueAuditEvent(payload);
