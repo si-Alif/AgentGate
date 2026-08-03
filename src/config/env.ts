@@ -45,8 +45,6 @@ const envSchema = z.object({
   // Week 5 — Audit compliance
   // ═══════════════════════════════════════════════════════
   // AGENTGATE_AUDIT_RETENTION_DAYS: z.coerce.number().default(90),
-
-
   // add alongside the existing AGENTGATE_ variables
   AGENTGATE_MCP_ALLOWED_ORIGINS: z
     .string()
@@ -57,6 +55,11 @@ const envSchema = z.object({
   AGENTGATE_MCP_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(40_000),
   AGENTGATE_MCP_TOOLS_LIST_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(30),
   AGENTGATE_MCP_TOOL_CALL_RATE_LIMIT: z.coerce.number().int().positive().default(60),
+
+
+  // observability
+  AGENTGATE_WS_TICKET_TTL_SECONDS: z.coerce.number().int().positive().default(30),
+  AGENTGATE_WS_TICKET_ISSUE_RATE_LIMIT: z.coerce.number().int().positive().default(10),
 });
 
 

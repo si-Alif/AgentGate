@@ -21,6 +21,7 @@ import { authenticate } from "./hooks/authenticate.hook.js";
 import { attachTenantContext } from "./hooks/attach-tenant-context.hook.js";
 import { requireActiveIdentity } from "./hooks/require-active-identity.hook.js";
 import { getTenantContext,getActiveUser } from "./lib/request-context.js";
+import { observabilityRoutes } from "./routes/observability.js";
 
 export async function createApp(): Promise<FastifyInstance> {
   const logger: Record<string, unknown> = {
@@ -169,6 +170,7 @@ export async function createApp(): Promise<FastifyInstance> {
     await scope.register(toolRoutes, { prefix: "/api/tools" });
     await scope.register(permissionRoutes, { prefix: "/api/agents" });
     await scope.register(auditEventRoutes, { prefix: "/api/audit-events" });
+    await scope.register(observabilityRoutes, { prefix: "/api/observability" });
 
   });
 
