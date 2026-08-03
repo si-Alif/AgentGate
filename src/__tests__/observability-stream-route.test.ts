@@ -1,0 +1,217 @@
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { WebSocket as WsClient } from "ws";
+import crypto from "node:crypto";
+import type { AddressInfo } from "node:net";
+import { createApp } from "../app.js";
+import { rateLimiterRedis } from "../lib/rate-limiter.js";
+import * as originValidator from "../mcp/http/origin-validator.js";
+import { getActiveConnectionCount, resetAllConnectionsForTest } from "../observability/ws-connection-tracker.js";
+import { WS_CLOSE_CODE } from "../observability/ws-protocol.js";
+import { env } from "../config/env.js";
+import { createTestTenant, cleanupTenant } from "./helpers/test-tenant.factory.js";
+
+/**
+ * Real, unmocked ws client — deliberately NOT a browser-emulation
+ * shim. Because this design NEVER rejects pre-upgrade (Decision 7.34
+ * / Finding F3), a real browser observes the identical sequence of
+ * events a Node ws client observes here: successful open, then
+ * message(s), then close(code, reason). If this design ever regressed
+ * to a pre-upgrade rejection, THIS test client would still "pass"
+ * (Node's ws CAN read pre-101 responses) while silently breaking real
+ * browsers — which is exactly why the design itself, not the test
+ * client, is what has to guarantee post-upgrade-only rejection.
+ */
+function connectAndCollect(url: string, headers?: Record<string, string>) {
+  const ws = new WsClient(url, headers ? { headers } : undefined);
+  const messages: any[] = [];
+  ws.on("message", (data) => messages.push(JSON.parse(data.toString())));
+  const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+    ws.once("close", (code, reasonBuf) => resolve({ code, reason: reasonBuf.toString() }));
+  });
+  return { ws, messages, closed };
+}
+
+async function waitForMessage(ws: WsClient): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timed out waiting for a message")), 3000);
+    ws.once("message", (data) => { clearTimeout(timer); resolve(JSON.parse(data.toString())); });
+  });
+}
+
+async function mintTicketFor(app: any, accessToken: string): Promise<string> {
+  const res = await app.inject({
+    method: "POST",
+    url: "/api/observability/ticket",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  return JSON.parse(res.body).ticket;
+}
+
+describe("GET /observability/stream", () => {
+  let app: Awaited<ReturnType<typeof createApp>>;
+  let port: number;
+
+  beforeAll(async () => {
+    app = await createApp();
+    await app.ready();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    port = (app.server.address() as AddressInfo).port;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("a valid ticket completes the handshake and returns EXACTLY {type, serverTime, tenantId}", async () => {
+    const tenant = await createTestTenant(app);
+    const ticket = await mintTicketFor(app, tenant.accessToken);
+
+    const { ws, messages } = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+    const frame = await waitForMessage(ws);
+
+    expect(frame.type).toBe("connected");
+    expect(Object.keys(frame).sort()).toEqual(["serverTime", "tenantId", "type"]);
+    expect(frame.tenantId).toBe(tenant.tenantId);
+    expect(messages).toHaveLength(1);
+
+    ws.close();
+    await cleanupTenant(tenant.tenantId);
+  });
+
+  it("a missing ticket query param closes 4001, before any Redis work", async () => {
+    const getdelSpy = vi.spyOn(rateLimiterRedis, "getdel");
+    const { messages, closed } = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream`);
+    const result = await closed;
+
+    expect(result.code).toBe(WS_CLOSE_CODE.TICKET_INVALID);
+    expect(messages[0]).toMatchObject({ type: "error", code: WS_CLOSE_CODE.TICKET_INVALID });
+    expect(getdelSpy).not.toHaveBeenCalled();
+    getdelSpy.mockRestore();
+  });
+
+  it("an unknown (never-minted) ticket closes 4001", async () => {
+    const { closed } = connectAndCollect(
+      `ws://127.0.0.1:${port}/observability/stream?ticket=never-minted-${crypto.randomUUID()}`
+    );
+    expect((await closed).code).toBe(WS_CLOSE_CODE.TICKET_INVALID);
+  });
+
+  it("GATE — a ticket already redeemed by one connection is rejected 4001 on a second attempt", async () => {
+    const tenant = await createTestTenant(app);
+    const ticket = await mintTicketFor(app, tenant.accessToken);
+
+    const first = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+    await waitForMessage(first.ws); // let redemption + connected frame complete
+
+    const second = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+    expect((await second.closed).code).toBe(WS_CLOSE_CODE.TICKET_INVALID);
+
+    first.ws.close();
+    await cleanupTenant(tenant.tenantId);
+  });
+
+  it("GATE — a truly concurrent double-redemption of the SAME ticket: exactly one side connects, the other is rejected", async () => {
+    const tenant = await createTestTenant(app);
+    const ticket = await mintTicketFor(app, tenant.accessToken);
+
+    const a = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+    const b = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+
+    const outcomeOf = (conn: ReturnType<typeof connectAndCollect>) =>
+      Promise.race([
+        new Promise<"connected">((resolve) =>
+          conn.ws.on("message", (d) => { if (JSON.parse(d.toString()).type === "connected") resolve("connected"); })
+        ),
+        conn.closed.then(() => "rejected" as const),
+      ]);
+
+    const outcomes = (await Promise.all([outcomeOf(a), outcomeOf(b)])).sort();
+    expect(outcomes).toEqual(["connected", "rejected"]);
+
+    a.ws.close();
+    b.ws.close();
+    await cleanupTenant(tenant.tenantId);
+  });
+
+  it("a disallowed Origin closes 4002, before any Redis/ticket work at all", async () => {
+    const spy = vi.spyOn(originValidator, "isOriginAllowed").mockReturnValue(false);
+    const getdelSpy = vi.spyOn(rateLimiterRedis, "getdel");
+
+    const { messages, closed } = connectAndCollect(
+      `ws://127.0.0.1:${port}/observability/stream?ticket=whatever`,
+      { Origin: "https://evil.example" }
+    );
+    const result = await closed;
+
+    expect(result.code).toBe(WS_CLOSE_CODE.ORIGIN_NOT_ALLOWED);
+    expect(messages[0]).toMatchObject({ type: "error", code: WS_CLOSE_CODE.ORIGIN_NOT_ALLOWED });
+    expect(getdelSpy).not.toHaveBeenCalled();
+
+    spy.mockRestore();
+    getdelSpy.mockRestore();
+  });
+
+  it("GATE — a Redis failure during ticket redemption closes 4005 (SERVICE_DEGRADED), never 4001", async () => {
+    const tenant = await createTestTenant(app);
+    const ticket = await mintTicketFor(app, tenant.accessToken);
+
+    const spy = vi.spyOn(rateLimiterRedis, "getdel").mockRejectedValue(new Error("ECONNRESET"));
+    const { messages, closed } = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+    const result = await closed;
+
+    expect(result.code).toBe(WS_CLOSE_CODE.SERVICE_DEGRADED);
+    expect(messages[0]).toMatchObject({ type: "error", code: WS_CLOSE_CODE.SERVICE_DEGRADED });
+
+    spy.mockRestore();
+    await cleanupTenant(tenant.tenantId);
+  });
+
+  it("GATE — the (N+1)th concurrent connection from one user is rejected 4003; freeing a slot allows a new one", async () => {
+    resetAllConnectionsForTest();
+    const tenant = await createTestTenant(app);
+    const limit = env.AGENTGATE_WS_MAX_CONNECTIONS_PER_USER;
+    const sockets: WsClient[] = [];
+
+    for (let i = 0; i < limit; i++) {
+      const ticket = await mintTicketFor(app, tenant.accessToken);
+      const { ws } = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+      await waitForMessage(ws);
+      sockets.push(ws);
+    }
+    expect(getActiveConnectionCount(tenant.userId)).toBe(limit);
+
+    const overflowTicket = await mintTicketFor(app, tenant.accessToken);
+    const overflow = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${overflowTicket}`);
+    expect((await overflow.closed).code).toBe(WS_CLOSE_CODE.CONNECTION_CEILING_EXCEEDED);
+
+    sockets[0]!.close();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(getActiveConnectionCount(tenant.userId)).toBe(limit - 1);
+
+    const freedTicket = await mintTicketFor(app, tenant.accessToken);
+    const freed = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${freedTicket}`);
+    const freedFrame = await waitForMessage(freed.ws);
+    expect(freedFrame.type).toBe("connected");
+
+    sockets.slice(1).forEach((s) => s.close());
+    freed.ws.close();
+    await cleanupTenant(tenant.tenantId);
+  });
+
+  it("GATE — exceeding the coarse, per-IP connect-attempt throttle closes 4006, distinct from every other rejection", async () => {
+    const spy = vi.spyOn(rateLimiterRedis, "getdel"); // never should be reached once throttled
+    const limit = env.AGENTGATE_WS_STREAM_CONNECT_RATE_LIMIT;
+    let last;
+    for (let i = 0; i <= limit; i++) {
+      const conn = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=garbage-${i}`);
+      last = await conn.closed;
+    }
+    expect(last!.code).toBe(WS_CLOSE_CODE.TOO_MANY_CONNECTION_ATTEMPTS);
+    spy.mockRestore();
+  }, 15_000);
+
+  it("REGRESSION — POST /api/observability/ticket (Day 1) is unaffected by today's routing split (Finding F2): still requires auth", async () => {
+    const res = await app.inject({ method: "POST", url: "/api/observability/ticket" });
+    expect(res.statusCode).toBe(401);
+  });
+});
