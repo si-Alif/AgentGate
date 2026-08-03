@@ -14,6 +14,8 @@ import {
   closeTenantEventSubscriber,
   resetTenantRegistryForTest,
 } from "../observability/ws-tenant-registry.js";
+import { WS_CLOSE_CODE } from "../observability/ws-protocol.js";
+import { env } from "../config/env.js";
 
 function fakeSocket(readyState: number = WebSocket.OPEN) {
   return { readyState, send: vi.fn() } as unknown as WebSocket;
@@ -230,5 +232,74 @@ describe("ws-tenant-registry", () => {
     expect(() => tenantEventSubscriber.emit("error", new Error("simulated blip"))).not.toThrow();
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+});
+
+describe("dispatchTenantMessage — Day 4 backpressure gating (Decision 7.53/7.54)", () => {
+  it("GATE — a socket over the backpressure threshold is rejected with POLICY_VIOLATION and never sent the event", () => {
+    const tenantId = crypto.randomUUID();
+    const overloaded = fakeSocket();
+    (overloaded as any).bufferedAmount = env.AGENTGATE_WS_BACKPRESSURE_THRESHOLD_BYTES + 1;
+    (overloaded as any).close = vi.fn();
+
+    registerTenantViewer(tenantId, overloaded);
+    dispatchTenantMessage(tenantEventChannelName(tenantId), JSON.stringify(sampleEvent(tenantId)));
+
+    expect((overloaded as any).send).toHaveBeenCalledTimes(1); // the error frame only
+    const sentFrame = JSON.parse((overloaded as any).send.mock.calls[0][0]);
+    expect(sentFrame).toMatchObject({ type: "error", code: WS_CLOSE_CODE.POLICY_VIOLATION });
+    expect((overloaded as any).close).toHaveBeenCalledWith(WS_CLOSE_CODE.POLICY_VIOLATION, expect.any(String));
+  });
+
+  it("a socket exactly AT the threshold is still sent to (strictly-greater-than semantics)", () => {
+    const tenantId = crypto.randomUUID();
+    const socket = fakeSocket();
+    (socket as any).bufferedAmount = env.AGENTGATE_WS_BACKPRESSURE_THRESHOLD_BYTES;
+    registerTenantViewer(tenantId, socket);
+
+    dispatchTenantMessage(tenantEventChannelName(tenantId), JSON.stringify(sampleEvent(tenantId)));
+
+    expect((socket as any).send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((socket as any).send.mock.calls[0][0]).type).toBe("event");
+  });
+
+  it("GATE — one overloaded socket rejected mid-fan-out never prevents delivery to the REST of that tenant's healthy viewers", () => {
+    const tenantId = crypto.randomUUID();
+    const overloaded = fakeSocket();
+    (overloaded as any).bufferedAmount = env.AGENTGATE_WS_BACKPRESSURE_THRESHOLD_BYTES + 1;
+    (overloaded as any).close = vi.fn();
+    const healthy = fakeSocket();
+    registerTenantViewer(tenantId, overloaded);
+    registerTenantViewer(tenantId, healthy);
+
+    dispatchTenantMessage(tenantEventChannelName(tenantId), JSON.stringify(sampleEvent(tenantId)));
+
+    expect((healthy as any).send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((healthy as any).send.mock.calls[0][0]).type).toBe("event");
+  });
+
+  it("Finding F4 regression guard — the fan-out loop tolerates a synchronous mutation of the SAME viewer Set mid-iteration without skipping or double-processing any socket", () => {
+    // Simulates the theoretical hazard the Array.from() snapshot
+    // defends against, proving the snapshot actually holds even if a
+    // future change reintroduces synchronous mutation.
+    const tenantId = crypto.randomUUID();
+    const socketA = fakeSocket();
+    const socketB = fakeSocket();
+    registerTenantViewer(tenantId, socketA);
+    registerTenantViewer(tenantId, socketB);
+
+    const originalSend = (socketA as any).send;
+    (socketA as any).send = vi.fn((...args: unknown[]) => {
+      deregisterTenantViewer(tenantId, socketB); // synchronous mutation of the live Set
+      return originalSend(...args);
+    });
+
+    expect(() =>
+      dispatchTenantMessage(tenantEventChannelName(tenantId), JSON.stringify(sampleEvent(tenantId)))
+    ).not.toThrow();
+    // socketB was already snapshotted before the mutation — it still
+    // receives the event this one time, proving the snapshot, not
+    // luck, is what's protecting the loop.
+    expect((socketB as any).send).toHaveBeenCalledTimes(1);
   });
 });

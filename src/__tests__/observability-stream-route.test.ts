@@ -352,7 +352,10 @@ describe("GET /observability/stream — Day 3: live cross-tenant event delivery 
     await cleanupTenant(tenant.tenantId);
   }, 15_000);
 
-  it("registers at most two 'close' listeners per connection — no MaxListenersExceededWarning", async () => {
+  // UPDATE to Day 3's existing test — a THIRD independent close listener
+  // (heartbeat) now exists alongside the ceiling tracker and tenant
+  // registry.
+  it("registers at most three 'close' listeners per connection — no MaxListenersExceededWarning", async () => {
     const tenant = await createTestTenant(app);
     const ticket = await mintTicketFor(app, tenant.accessToken);
     const warnSpy = vi.fn();

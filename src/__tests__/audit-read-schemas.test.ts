@@ -37,3 +37,30 @@ describe("auditCursorSchema", () => {
     ).toBe(false);
   });
 });
+
+describe("auditListQuerySchema — `since` (Week 7 Day 4, Finding F1)", () => {
+  it("accepts a valid ISO date string for `since`", () => {
+    const result = auditListQuerySchema.safeParse({ since: "2026-08-01T00:00:00.000Z" });
+    expect(result.success).toBe(true);
+    expect(result.data?.since).toBeInstanceOf(Date);
+  });
+
+  it("REGRESSION — omitting `since` is fully backward compatible with every existing caller", () => {
+    const result = auditListQuerySchema.safeParse({ limit: 10 });
+    expect(result.success).toBe(true);
+    expect(result.data?.since).toBeUndefined();
+  });
+
+  it("rejects a non-date string", () => {
+    expect(auditListQuerySchema.safeParse({ since: "not-a-date" }).success).toBe(false);
+  });
+
+  it("composes with cursor and entity filters without conflict", () => {
+    const result = auditListQuerySchema.safeParse({
+      since: "2026-08-01T00:00:00.000Z",
+      eventType: "TOOL_INVOCATION",
+      agentId: "agent-1",
+    });
+    expect(result.success).toBe(true);
+  });
+});

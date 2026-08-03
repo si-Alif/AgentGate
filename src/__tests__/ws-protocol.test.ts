@@ -9,6 +9,8 @@ import {
   sendEventFrame
 } from "../observability/ws-protocol.js";
 import type { LiveExecutionEvent } from "../lib/audit-publish.js";
+import { terminateUnresponsiveConnection } from "../observability/ws-protocol.js";
+
 
 function fakeSocket(readyState: number) {
   return { readyState, send: vi.fn(), close: vi.fn() };
@@ -138,5 +140,53 @@ describe("sendEventFrame", () => {
     const frame = JSON.parse((socket.send as any).mock.calls[0][0]);
     expect(frame.type).toBe("event");
     expect(frame.id).toBe(event.id);
+  });
+});
+
+describe("terminateUnresponsiveConnection — Day 4, Decision 7.50 / Finding F3", () => {
+  function fakeSocketWithTerminate(readyState: number) {
+    return { readyState, send: vi.fn(), terminate: vi.fn() };
+  }
+
+  it("attempts to send an error frame when OPEN, then calls terminate() — never close()", () => {
+    const socket = fakeSocketWithTerminate(WebSocket.OPEN);
+    terminateUnresponsiveConnection(socket as any, WS_CLOSE_CODE.HEARTBEAT_TIMEOUT);
+
+    expect(socket.send).toHaveBeenCalledTimes(1);
+    const frame = JSON.parse((socket.send as any).mock.calls[0][0]);
+    expect(frame).toEqual({ type: "error", code: 4004, message: expect.any(String) });
+    expect(socket.terminate).toHaveBeenCalledTimes(1);
+    // The load-bearing distinction from rejectConnection():
+    expect((socket as any).close).toBeUndefined();
+  });
+
+  it("does not attempt to send when the socket is not OPEN, but still terminates", () => {
+    const socket = fakeSocketWithTerminate(WebSocket.CLOSING);
+    terminateUnresponsiveConnection(socket as any, WS_CLOSE_CODE.HEARTBEAT_TIMEOUT);
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(socket.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it("never throws even if send() itself throws — terminate() is still attempted", () => {
+    const socket = fakeSocketWithTerminate(WebSocket.OPEN);
+    (socket.send as any).mockImplementation(() => { throw new Error("boom"); });
+    expect(() => terminateUnresponsiveConnection(socket as any, WS_CLOSE_CODE.HEARTBEAT_TIMEOUT)).not.toThrow();
+    expect(socket.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it("never throws even if terminate() itself throws", () => {
+    const socket = fakeSocketWithTerminate(WebSocket.OPEN);
+    (socket.terminate as any).mockImplementation(() => { throw new Error("already gone"); });
+    expect(() => terminateUnresponsiveConnection(socket as any, WS_CLOSE_CODE.HEARTBEAT_TIMEOUT)).not.toThrow();
+  });
+});
+
+describe("WS_CLOSE_REASON — Day 4 addition", () => {
+  it("rejectConnection uses a specific, non-generic reason for POLICY_VIOLATION", () => {
+    const socket = { readyState: WebSocket.OPEN, send: vi.fn(), close: vi.fn() };
+    rejectConnection(socket as any, WS_CLOSE_CODE.POLICY_VIOLATION);
+    const frame = JSON.parse((socket.send as any).mock.calls[0][0]);
+    expect(frame.message).toBe("Backpressure threshold exceeded");
+    expect(frame.message).not.toBe("Connection rejected"); // the old generic fallback
   });
 });
