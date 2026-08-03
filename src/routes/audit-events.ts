@@ -8,12 +8,19 @@ export async function auditEventRoutes(app: FastifyInstance) {
   // ── shared rate limiter helper ────────────────────────────────────
   async function enforceAuditRateLimit(request: any, reply: any): Promise<boolean> {
     const { userId } = getTenantContext(request);
-    const result = await checkRateLimitByKey(`user:${userId}:audit-read`, 30);
-    if (!result.allowed) {
+    const rateLimitResult = await checkRateLimitByKey(userId, 30);
+    if (!rateLimitResult.allowed) {
+      if (rateLimitResult.degraded) {
+        return reply.status(503).send({
+          statusCode: 503,
+          error: "service_degraded",
+          message: "Audit event listing is temporarily degraded. Retry shortly.",
+        });
+      }
       reply.status(429).send({
         statusCode: 429,
-        error: "Too Many Requests",
-        message: "Rate limit exceeded for audit read operations",
+        error: "rate_limited",
+        message: "Too many requests. Retry after your rate limit window resets.",
       });
       return false;
     }
@@ -89,9 +96,26 @@ export async function auditEventRoutes(app: FastifyInstance) {
     async (request, reply) => {
       if (!(await enforceAuditRateLimit(request, reply))) return;
 
-      const { tenantId } = getTenantContext(request);
-      const { id } = request.params as { id: string };
+      const { tenantId , userId } = getTenantContext(request);
 
+      const rateLimitResult = await checkRateLimitByKey(userId, 30);
+      if (!rateLimitResult.allowed) {
+        if (rateLimitResult.degraded) {
+          return reply.status(503).send({
+            statusCode: 503,
+            error: "service_degraded",
+            message: "Audit event detail retrieval is temporarily degraded. Retry shortly.",
+          });
+        }
+        reply.status(429).send({
+          statusCode: 429,
+          error: "rate_limited",
+          message: "Too many requests. Retry after your rate limit window resets.",
+        });
+        return;
+      }
+      
+      const { id } = request.params as { id: string };
       const detail = await getAuditEventDetail(tenantId, id);
       if (!detail) {
         return reply.status(404).send({ error: "Audit event not found" });
