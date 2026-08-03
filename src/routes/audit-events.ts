@@ -34,6 +34,7 @@ export async function auditEventRoutes(app: FastifyInstance) {
             status: { type: "string" },
             agentId: { type: "string" },
             toolId: { type: "string" },
+            since : { type: "string", format: "date-time" },
           },
           additionalProperties: false,
         },
