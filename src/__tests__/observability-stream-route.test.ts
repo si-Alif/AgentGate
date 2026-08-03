@@ -13,6 +13,7 @@ import { executeTool } from "../lib/execute-tool.js";
 import { createAuditWorker } from "../workers/audit.worker.js";
 import { encryptConfig } from "../lib/encryption.js";
 import { prisma } from "../lib/prisma.js";
+import { getAllRegisteredSockets, closeAllObservabilityConnections } from "../observability/ws-tenant-registry.js";
 
 /**
  * Real, unmocked ws client — deliberately NOT a browser-emulation
@@ -515,5 +516,71 @@ describe("GET /observability/stream — Day 4: heartbeat, backpressure wiring, l
 
     conn.ws.close();
     await cleanupTenant(tenant.tenantId);
+  }, 10_000);
+});
+
+
+
+describe("GET /observability/stream — Week 7 Day 5: real shutdown-helper proof", () => {
+
+  let app: Awaited<ReturnType<typeof createApp>>;
+  let port: number;
+
+  beforeAll(async () => {
+    app = await createApp();
+    await app.ready();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    port = (app.server.address() as AddressInfo).port;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(async () => {
+    resetAllConnectionsForTest();
+    await rateLimiterRedis.flushdb();
+  });
+
+
+  it("CHECKPOINT — closeAllObservabilityConnections closes every real, locally-held socket with code 1001, and every registry ends up empty", async () => {
+    const tenantA = await createTestTenant(app);
+    const tenantB = await createTestTenant(app);
+    const ticketA = await mintTicketFor(app, tenantA.accessToken);
+    const ticketB = await mintTicketFor(app, tenantB.accessToken);
+
+    const connA = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticketA}`);
+    const connB = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticketB}`);
+    await waitForMessage(connA.ws);
+    await waitForMessage(connB.ws);
+
+    expect(getAllRegisteredSockets().length).toBe(2);
+
+    await closeAllObservabilityConnections(2000);
+
+    const [closedA, closedB] = await Promise.all([connA.closed, connB.closed]);
+    expect(closedA.code).toBe(1001);
+    expect(closedB.code).toBe(1001);
+
+    await new Promise((r) => setTimeout(r, 50)); // let all close-listener cleanup settle
+    expect(getAllRegisteredSockets().length).toBe(0);
+    expect(getActiveConnectionCount(tenantA.userId)).toBe(0);
+    expect(getActiveConnectionCount(tenantB.userId)).toBe(0);
+
+    await cleanupTenant(tenantA.tenantId);
+    await cleanupTenant(tenantB.tenantId);
+  }, 10_000);
+
+  it("no client receives an error frame before its 1001 close — confirms closeConnectionForShutdown never sends one", async () => {
+    const tenant = await createTestTenant(app);
+    const ticket = await mintTicketFor(app, tenant.accessToken);
+    const conn = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+    await waitForMessage(conn.ws); // connected frame
+
+    await closeAllObservabilityConnections(2000);
+    await conn.closed;
+
+    expect(conn.messages).toHaveLength(1); // only the original `connected` frame — no error frame appended
+    expect(conn.messages[0].type).toBe("connected");
   }, 10_000);
 });
