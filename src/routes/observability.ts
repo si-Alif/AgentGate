@@ -11,6 +11,7 @@ import { redeemWsTicket } from "../observability/ws-ticket.js";
 import type { WsTicketPayload } from "../observability/ws-ticket.js";
 import { registerConnection, deregisterConnection } from "../observability/ws-connection-tracker.js";
 import { rejectConnection, sendConnectedFrame, WS_CLOSE_CODE } from "../observability/ws-protocol.js";
+import { registerTenantViewer, deregisterTenantViewer } from "../observability/ws-tenant-registry.js";
 
 const WS_TICKET_RATE_NAMESPACE = "ws-ticket";
 const CONNECT_RATE_NAMESPACE = "ws-stream-connect";
@@ -230,14 +231,26 @@ async function handleStreamUpgrade(socket: WebSocket, request: FastifyRequest): 
       deregisterConnection(resolvedIdentity.userId, socket);
     });
 
+    // Once a client observes `connected`, it
+    // is already eligible to receive any event published from this
+    // instant forward.
+    registerTenantViewer(resolvedIdentity.tenantId, socket);
+
+    // A SECOND, fully independent .once("close", ...) listener
+    //  — deliberately NOT merged
+    // with the ceiling-tracker listener above. The two subsystems own
+    // disjoint state with no ordering dependency, and each is
+    // independently idempotent.
+    socket.once("close", () => {
+      deregisterTenantViewer(resolvedIdentity.tenantId, socket);
+    });
+
     sendConnectedFrame(socket, resolvedIdentity.tenantId);
-    // Day 3 registers this connection into the tenant-channel registry
-    // and wires it to live Redis pub/sub fan-out. Until then, a
-    // successfully-connected socket deliberately does nothing further
-    // — it has received `connected` and stays open, idle, exactly
-    // mirroring how Week 6 Day 2's POST /mcp handler returned a
-    // `_placeholder` result for a resolved identity, deferring
-    // tools/list/tools/call dispatch to Day 3/4.
+    // Day 4 adds a bufferedAmount backpressure gate around
+    // ws-tenant-registry.ts's existing fan-out send call site, plus
+    // native ping/pong heartbeating. Day 5 wires this week's one new
+    // Redis connection (tenantEventSubscriber) into /health and
+    // server.ts's shutdown sequence.
   } catch (err) {
     request.log.error({ err }, "[observability-stream] unexpected failure during upgrade");
     rejectConnection(socket, WS_CLOSE_CODE.SERVICE_DEGRADED);

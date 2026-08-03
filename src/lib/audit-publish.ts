@@ -15,6 +15,10 @@ export interface LiveExecutionEvent {
   timestamp: string; // ISO — pub/sub payloads are always plain JSON strings
 }
 
+export function tenantEventChannelName(tenantId: string): string {
+  return `events:tenant:${tenantId}`;
+}
+
 function buildLiveEvent(payload: AuditJobPayload): LiveExecutionEvent {
   const event: LiveExecutionEvent = {
     id: payload.id,
@@ -38,7 +42,7 @@ function buildLiveEvent(payload: AuditJobPayload): LiveExecutionEvent {
 export async function publishLiveEvent(payload: AuditJobPayload): Promise<void> {
   const event = buildLiveEvent(payload);
   try {
-    await redis.publish(`events:tenant:${payload.tenantId}`, JSON.stringify(event));
+    await redis.publish(tenantEventChannelName(payload.tenantId), JSON.stringify(event));
   } catch (err) {
     console.error(`[audit-publish] failed to publish live event ${payload.id}:`, err);
   }

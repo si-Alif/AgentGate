@@ -1,6 +1,9 @@
 import { WebSocket } from "ws";
+import type { LiveExecutionEvent } from "../lib/audit-publish.js";
+
 
 /**
+ *
  * The full, closed wire-protocol vocabulary for /observability/stream
  * — Part 4 of roadmap_w7.md, made real starting today. Every rejection
  * path anywhere in this week's WS surface maps to exactly one of these
@@ -26,6 +29,8 @@ export interface WsErrorFrame {
   code: number; // mirrors the WS close code that follows
   message: string;
 }
+
+export type WsEventFrame = LiveExecutionEvent & { type: "event" };
 
 // WsEventFrame (wrapping the existing LiveExecutionEvent, Week 5) is
 // Day 4's addition — the "event" WsFrameType above is reserved for it
@@ -100,4 +105,12 @@ export function rejectConnection(
 
 export function sendConnectedFrame(socket: Pick<WebSocket, "send">, tenantId: string): void {
   socket.send(JSON.stringify(buildConnectedFrame(tenantId)));
+}
+
+export function buildEventFrame(event : LiveExecutionEvent) : WsEventFrame {
+  return {type : "event" , ...event}
+}
+
+export function sendEventFrame(socket: Pick<WebSocket, "send">, event : LiveExecutionEvent) : void {
+  socket.send(JSON.stringify(buildEventFrame(event)));
 }
