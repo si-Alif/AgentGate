@@ -10,10 +10,25 @@ import {
 } from "../observability/ws-protocol.js";
 import type { LiveExecutionEvent } from "../lib/audit-publish.js";
 import { terminateUnresponsiveConnection } from "../observability/ws-protocol.js";
+import { closeConnectionForShutdown } from "../observability/ws-protocol.js";
+
+
 
 
 function fakeSocket(readyState: number) {
   return { readyState, send: vi.fn(), close: vi.fn() };
+}
+
+function fakeSocketForShutdown(readyState: number) {
+  const listeners: Record<string, Function[]> = {};
+  return {
+    readyState,
+    send: vi.fn(),
+    close: vi.fn(),
+    terminate: vi.fn(),
+    once(event: string, cb: Function) { (listeners[event] ??= []).push(cb); },
+    emit(event: string, ...args: unknown[]) { (listeners[event] ?? []).forEach((cb) => cb(...args)); },
+  };
 }
 
 function sampleEvent(overrides: Partial<LiveExecutionEvent> = {}): LiveExecutionEvent {
@@ -188,5 +203,60 @@ describe("WS_CLOSE_REASON — Day 4 addition", () => {
     const frame = JSON.parse((socket.send as any).mock.calls[0][0]);
     expect(frame.message).toBe("Backpressure threshold exceeded");
     expect(frame.message).not.toBe("Connection rejected"); // the old generic fallback
+  });
+});
+
+
+describe("closeConnectionForShutdown — Week 7 Day 5, Decision 7.65", () => {
+  it("resolves once the socket's own 'close' event fires naturally", async () => {
+    const socket = fakeSocketForShutdown(WebSocket.OPEN);
+    const p = closeConnectionForShutdown(socket as any, 5000);
+    expect(socket.close).toHaveBeenCalledWith(WS_CLOSE_CODE.GOING_AWAY, expect.any(String));
+    socket.emit("close");
+    await expect(p).resolves.toBeUndefined();
+    expect(socket.terminate).not.toHaveBeenCalled(); // graceful path — no fallback needed
+  });
+
+  it("GATE — falls back to terminate() once the grace period elapses without a close event", async () => {
+    vi.useFakeTimers();
+    const socket = fakeSocketForShutdown(WebSocket.OPEN);
+    const p = closeConnectionForShutdown(socket as any, 100);
+    vi.advanceTimersByTime(100);
+    await p;
+    expect(socket.terminate).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("GATE — never sends an error frame, unlike rejectConnection", async () => {
+    const socket = fakeSocketForShutdown(WebSocket.OPEN);
+    const p = closeConnectionForShutdown(socket as any, 5000);
+    socket.emit("close");
+    await p;
+    expect(socket.send).not.toHaveBeenCalled();
+  });
+
+  it("uses the GOING_AWAY (1001) close code", async () => {
+    const socket = fakeSocketForShutdown(WebSocket.OPEN);
+    const p = closeConnectionForShutdown(socket as any, 5000);
+    socket.emit("close");
+    await p;
+    expect(socket.close).toHaveBeenCalledWith(1001, expect.any(String));
+  });
+
+  it("a socket already CLOSED resolves immediately, no-op", async () => {
+    const socket = fakeSocketForShutdown(WebSocket.CLOSED);
+    await expect(closeConnectionForShutdown(socket as any)).resolves.toBeUndefined();
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(socket.terminate).not.toHaveBeenCalled();
+  });
+
+  it("never throws even if close() itself throws — falls through to the timeout/terminate path", async () => {
+    vi.useFakeTimers();
+    const socket = fakeSocketForShutdown(WebSocket.OPEN);
+    (socket.close as any).mockImplementation(() => { throw new Error("already closing"); });
+    const p = closeConnectionForShutdown(socket as any, 50);
+    vi.advanceTimersByTime(50);
+    await expect(p).resolves.toBeUndefined();
+    vi.useRealTimers();
   });
 });

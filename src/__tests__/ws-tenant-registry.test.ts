@@ -29,15 +29,17 @@ function sampleEvent(tenantId: string): LiveExecutionEvent {
   };
 }
 
-describe("ws-tenant-registry", () => {
-  beforeEach(async () => {
-    await resetTenantRegistryForTest();
-  });
+beforeEach(async () => {
+  await resetTenantRegistryForTest();
+});
 
-  afterAll(async () => {
-    await resetTenantRegistryForTest();
-    await closeTenantEventSubscriber();
-  });
+afterAll(async () => {
+  await resetTenantRegistryForTest();
+  await closeTenantEventSubscriber();
+});
+
+describe("ws-tenant-registry", () => {
+
 
   it("GATE — the subscriber connection is a genuinely SEPARATE instance from the shared redis client (Finding F1)", () => {
     expect(tenantEventSubscriber).not.toBe(redis);
@@ -301,5 +303,110 @@ describe("dispatchTenantMessage — Day 4 backpressure gating (Decision 7.53/7.5
     // receives the event this one time, proving the snapshot, not
     // luck, is what's protecting the loop.
     expect((socketB as any).send).toHaveBeenCalledTimes(1);
+  });
+});
+
+import {
+  getAllRegisteredSockets,
+  getTotalViewerCount,
+  closeAllObservabilityConnections,
+  getObservabilityStreamHealth,
+} from "../observability/ws-tenant-registry.js";
+
+describe("getAllRegisteredSockets / getTotalViewerCount — Week 7 Day 5, Decision 7.63", () => {
+  it("returns every registered socket across every tenant, deduplicated", () => {
+    const tenantA = crypto.randomUUID();
+    const tenantB = crypto.randomUUID();
+    const socketA1 = fakeSocket();
+    const socketA2 = fakeSocket();
+    const socketB1 = fakeSocket();
+    registerTenantViewer(tenantA, socketA1);
+    registerTenantViewer(tenantA, socketA2);
+    registerTenantViewer(tenantB, socketB1);
+
+    const all = getAllRegisteredSockets();
+    expect(all).toHaveLength(3);
+    expect(new Set(all)).toEqual(new Set([socketA1, socketA2, socketB1]));
+    expect(getTotalViewerCount()).toBe(3);
+  });
+
+  it("returns an empty array when nothing is registered", () => {
+    expect(getAllRegisteredSockets()).toEqual([]);
+    expect(getTotalViewerCount()).toBe(0);
+  });
+});
+
+describe("closeAllObservabilityConnections — Week 7 Day 5, Decision 7.63/7.64", () => {
+  it("GATE — closes every registered socket, and lets their OWN close listeners deregister them (no manual cleanup call)", async () => {
+    const tenantId = crypto.randomUUID();
+    const socket = fakeSocket();
+
+    // 1. Maintain an array so multiple "close" listeners can coexist
+    const closeListeners: Function[] = [];
+    (socket as any).once = (socket as any).on = (event: string, cb: Function) => {
+      if (event === "close") closeListeners.push(cb);
+    };
+
+    // 2. Trigger all registered listeners when close() is invoked
+    (socket as any).close = vi.fn(() => {
+      setImmediate(() => {
+        for (const cb of [...closeListeners]) cb();
+      });
+    });
+    (socket as any).terminate = vi.fn();
+
+    // 3. Attach the socket's OWN close listener to simulate real connection lifecycle
+    (socket as any).once("close", () => deregisterTenantViewer(tenantId, socket));
+
+    registerTenantViewer(tenantId, socket);
+    expect(getViewerCountForTenant(tenantId)).toBe(1);
+
+    await closeAllObservabilityConnections(1000);
+
+    expect((socket as any).close).toHaveBeenCalledWith(WS_CLOSE_CODE.GOING_AWAY, expect.any(String));
+    expect(getViewerCountForTenant(tenantId)).toBe(0); // deregisterTenantViewer's listener now successfully fires!
+  });
+});
+
+describe("getObservabilityStreamHealth — Week 7 Day 5, Decision 7.67", () => {
+  it("GATE — reports HEALTHY via a REAL round-trip PING while genuinely subscribed to at least one channel", async () => {
+    const tenantId = crypto.randomUUID();
+    registerTenantViewer(tenantId, fakeSocket());
+    await new Promise((r) => setTimeout(r, 30)); // let the real SUBSCRIBE settle
+
+    const health = await getObservabilityStreamHealth();
+    expect(health.healthy).toBe(true);
+    expect(health.reason).toBe("HEALTHY");
+    expect(health.subscribedTenantCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("reports SUBSCRIBER_NOT_READY without attempting a PING when the connection's status isn't 'ready'", async () => {
+    const statusSpy = vi.spyOn(tenantEventSubscriber, "status", "get").mockReturnValue("connecting");
+    const pingSpy = vi.spyOn(tenantEventSubscriber, "ping");
+    const health = await getObservabilityStreamHealth();
+    expect(health.reason).toBe("SUBSCRIBER_NOT_READY");
+    expect(pingSpy).not.toHaveBeenCalled();
+    statusSpy.mockRestore();
+    pingSpy.mockRestore();
+  });
+
+  it("reports PING_TIMEOUT when the PING hangs past the 2s budget", async () => {
+    const pingSpy = vi.spyOn(tenantEventSubscriber, "ping").mockImplementation(() => new Promise(() => { }));
+    const health = await getObservabilityStreamHealth();
+    expect(health.reason).toBe("PING_TIMEOUT");
+    pingSpy.mockRestore();
+  }, 5_000);
+
+  it("reports PING_ERROR on an immediate PING rejection", async () => {
+    const pingSpy = vi.spyOn(tenantEventSubscriber, "ping").mockRejectedValue(new Error("ECONNRESET"));
+    const health = await getObservabilityStreamHealth();
+    expect(health.reason).toBe("PING_ERROR");
+    pingSpy.mockRestore();
+  });
+
+  it("never throws, even under a totally unexpected internal failure", async () => {
+    const spy = vi.spyOn(tenantEventSubscriber, "status", "get").mockImplementation(() => { throw new Error("boom"); });
+    await expect(getObservabilityStreamHealth()).resolves.toMatchObject({ healthy: false });
+    spy.mockRestore();
   });
 });

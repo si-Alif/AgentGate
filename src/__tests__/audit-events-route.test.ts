@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll , vi } from "vitest";
 import { createApp } from "../app.js";
 import { prisma } from "../lib/prisma.js";
 import {
@@ -77,7 +77,7 @@ describe("Audit Events Routes", () => {
 
     afterAll(async () => {
       await cleanupTenant(tenant.tenantId);
-      
+
     });
 
     it("returns a paginated list with lean rows", async () => {
@@ -275,6 +275,63 @@ describe("Audit Events Routes", () => {
 
         console.log("FASTIFY 400 ERROR BODY:", res.body);
         expect(res.statusCode).toBe(400);
+      });
+    });
+
+    describe("GET /audit-events — rate limit enforcement (Week 7 Day 5, Finding F1)", () => {
+      it("GATE — the 31st request in a minute for one user returns 429, not 200", async () => {
+        const tenant = await createTestTenant(app);
+        let last;
+        for (let i = 0; i < 31; i++) {
+          last = await app.inject({
+            method: "GET", url: "/api/audit-events",
+            headers: { Authorization: `Bearer ${tenant.accessToken}` },
+          });
+        }
+        expect(last!.statusCode).toBe(429);
+        expect(JSON.parse(last!.body).error).toBe("rate_limited");
+        await cleanupTenant(tenant.tenantId);
+      });
+
+      it("GATE — a DEGRADED rate-limit result maps to 503, never 429", async () => {
+        const tenant = await createTestTenant(app);
+        const rateLimiterModule = await import("../lib/rate-limiter.js");
+        const spy = vi.spyOn(rateLimiterModule, "checkRateLimitByKey").mockResolvedValue({
+          allowed: false, remaining: 0, degraded: true,
+        });
+        const res = await app.inject({
+          method: "GET", url: "/api/audit-events",
+          headers: { Authorization: `Bearer ${tenant.accessToken}` },
+        });
+        expect(res.statusCode).toBe(503);
+        expect(JSON.parse(res.body).error).toBe("service_degraded");
+        spy.mockRestore();
+        await cleanupTenant(tenant.tenantId);
+      });
+
+      it("the detail route (/:id) enforces the SAME limit independently of the list route", async () => {
+        const tenant = await createTestTenant(app);
+        const rateLimiterModule = await import("../lib/rate-limiter.js");
+        const spy = vi.spyOn(rateLimiterModule, "checkRateLimitByKey").mockResolvedValue({
+          allowed: false, remaining: 0, degraded: false,
+        });
+        const res = await app.inject({
+          method: "GET", url: `/api/audit-events/${crypto.randomUUID()}`,
+          headers: { Authorization: `Bearer ${tenant.accessToken}` },
+        });
+        expect(res.statusCode).toBe(429);
+        spy.mockRestore();
+        await cleanupTenant(tenant.tenantId);
+      });
+
+      it("REGRESSION — Day 4's `since` filter still behaves correctly for a request within budget", async () => {
+        const tenant = await createTestTenant(app);
+        const res = await app.inject({
+          method: "GET", url: `/api/audit-events?since=${new Date().toISOString()}`,
+          headers: { Authorization: `Bearer ${tenant.accessToken}` },
+        });
+        expect(res.statusCode).toBe(200);
+        await cleanupTenant(tenant.tenantId);
       });
     });
   });
