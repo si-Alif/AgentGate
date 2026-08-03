@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
 import { WebSocket as WsClient } from "ws";
 import crypto from "node:crypto";
 import type { AddressInfo } from "node:net";
@@ -8,8 +8,11 @@ import * as originValidator from "../mcp/http/origin-validator.js";
 import { getActiveConnectionCount, resetAllConnectionsForTest } from "../observability/ws-connection-tracker.js";
 import { WS_CLOSE_CODE } from "../observability/ws-protocol.js";
 import { env } from "../config/env.js";
-import { createTestTenant, cleanupTenant } from "./helpers/test-tenant.factory.js";
-
+import { createTestTenant, cleanupTenant, createTestAgent } from "./helpers/test-tenant.factory.js";
+import { executeTool } from "../lib/execute-tool.js";
+import { createAuditWorker } from "../workers/audit.worker.js";
+import { encryptConfig } from "../lib/encryption.js";
+import { prisma } from "../lib/prisma.js";
 /**
  * Real, unmocked ws client — deliberately NOT a browser-emulation
  * shim. Because this design NEVER rejects pre-upgrade (Decision 7.34
@@ -31,6 +34,8 @@ function connectAndCollect(url: string, headers?: Record<string, string>) {
   return { ws, messages, closed };
 }
 
+
+
 async function waitForMessage(ws: WsClient): Promise<any> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timed out waiting for a message")), 3000);
@@ -47,6 +52,19 @@ async function mintTicketFor(app: any, accessToken: string): Promise<string> {
   return JSON.parse(res.body).ticket;
 }
 
+async function createSsrfBlockedTool(tenantId: string, name: string) {
+  const ciphertext = encryptConfig(
+    JSON.stringify({ handlerType: "http", url: "http://127.0.0.1:1/probe", method: "GET" }),
+    tenantId
+  );
+  return prisma.tool.create({
+    data: {
+      tenantId, name, handlerType: "http", handlerConfig: ciphertext,
+      inputSchema: { type: "object", properties: {} }, isActive: true,
+    },
+  });
+}
+
 describe("GET /observability/stream", () => {
   let app: Awaited<ReturnType<typeof createApp>>;
   let port: number;
@@ -60,6 +78,11 @@ describe("GET /observability/stream", () => {
 
   afterAll(async () => {
     await app.close();
+  });
+
+  beforeEach(async () => {
+    resetAllConnectionsForTest();
+    await rateLimiterRedis.flushdb();
   });
 
   it("a valid ticket completes the handshake and returns EXACTLY {type, serverTime, tenantId}", async () => {
@@ -213,5 +236,135 @@ describe("GET /observability/stream", () => {
   it("REGRESSION — POST /api/observability/ticket (Day 1) is unaffected by today's routing split (Finding F2): still requires auth", async () => {
     const res = await app.inject({ method: "POST", url: "/api/observability/ticket" });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+
+describe("GET /observability/stream — Day 3: live cross-tenant event delivery (real infra)", () => {
+  let app: Awaited<ReturnType<typeof createApp>>;
+  let port: number;
+  let auditWorker: Awaited<ReturnType<typeof createAuditWorker>>;
+
+  beforeAll(async () => {
+    app = await createApp();
+    await app.ready();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    port = (app.server.address() as AddressInfo).port;
+    auditWorker = await createAuditWorker();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    if (auditWorker && typeof auditWorker.close === 'function') {
+      await auditWorker.close();
+    }
+  });
+
+  beforeEach(async () => {
+    resetAllConnectionsForTest();
+    await rateLimiterRedis.flushdb();
+  });
+
+  it("CHECKPOINT — a real tool call against Tenant A is delivered to Tenant A's viewer and NEVER to Tenant B's", async () => {
+    const tenantA = await createTestTenant(app);
+    const tenantB = await createTestTenant(app);
+    const { agent: agentA } = await createTestAgent(tenantA.tenantId, tenantA.userId);
+    const toolA = await createSsrfBlockedTool(tenantA.tenantId, `cross-tenant-probe-${Date.now()}`);
+
+    const ticketA = await mintTicketFor(app, tenantA.accessToken);
+    const ticketB = await mintTicketFor(app, tenantB.accessToken);
+    const connA = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticketA}`);
+    const connB = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticketB}`);
+
+    await waitForMessage(connA.ws); // await initial connected frame
+    await waitForMessage(connB.ws); // await initial connected frame
+
+    // 1. ARM THE LISTENER FIRST (do NOT await yet)
+    const eventPromise = waitForMessage(connA.ws);
+
+    // 2. TRIGGER THE TOOL EXECUTION
+    await executeTool(toolA.id, tenantA.tenantId, agentA.id, {}, new AbortController().signal);
+
+    // 3. NOW AWAIT THE EVENT
+    const eventFrame = await eventPromise;
+    expect(eventFrame.type).toBe("event");
+    expect(eventFrame.tenantId).toBe(tenantA.tenantId);
+    expect(eventFrame.toolId).toBe(toolA.id);
+
+    let bLeaked = false;
+    await Promise.race([
+      waitForMessage(connB.ws).then(() => { bLeaked = true; }),
+      new Promise<void>((resolve) => setTimeout(resolve, 500)),
+    ]);
+    expect(bLeaked).toBe(false);
+
+    connA.ws.close();
+    connB.ws.close();
+    await cleanupTenant(tenantA.tenantId);
+    await cleanupTenant(tenantB.tenantId);
+  }, 15_000);
+
+  it("two viewers of the SAME tenant both receive the SAME event (fan-out correctness)", async () => {
+    const tenant = await createTestTenant(app);
+    const { agent } = await createTestAgent(tenant.tenantId, tenant.userId);
+    const tool = await createSsrfBlockedTool(tenant.tenantId, `fanout-probe-${Date.now()}`);
+
+    const ticket1 = await mintTicketFor(app, tenant.accessToken);
+    const ticket2 = await mintTicketFor(app, tenant.accessToken);
+    const conn1 = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket1}`);
+    const conn2 = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket2}`);
+
+    await waitForMessage(conn1.ws); // connected frame
+    await waitForMessage(conn2.ws); // connected frame
+
+    // 1. ARM BOTH LISTENERS FIRST
+    const frame1Promise = waitForMessage(conn1.ws);
+    const frame2Promise = waitForMessage(conn2.ws);
+
+    // 2. TRIGGER TOOL EXECUTION
+    await executeTool(tool.id, tenant.tenantId, agent.id, {}, new AbortController().signal);
+
+    // 3. AWAIT BOTH
+    const [frame1, frame2] = await Promise.all([frame1Promise, frame2Promise]);
+    expect(frame1.id).toBe(frame2.id);
+    expect(frame1.tenantId).toBe(tenant.tenantId);
+
+    conn1.ws.close();
+    conn2.ws.close();
+    await cleanupTenant(tenant.tenantId);
+  }, 15_000);
+
+  it("after the only viewer disconnects, a subsequent tool call for that tenant produces no crash", async () => {
+    const tenant = await createTestTenant(app);
+    const { agent } = await createTestAgent(tenant.tenantId, tenant.userId);
+    const tool = await createSsrfBlockedTool(tenant.tenantId, `no-viewer-probe-${Date.now()}`);
+
+    const ticket = await mintTicketFor(app, tenant.accessToken);
+    const conn = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+    await waitForMessage(conn.ws);
+    conn.ws.close();
+    await new Promise((r) => setTimeout(r, 200)); // let deregistration + UNSUBSCRIBE settle
+
+    await expect(
+      executeTool(tool.id, tenant.tenantId, agent.id, {}, new AbortController().signal)
+    ).resolves.toBeDefined();
+
+    await cleanupTenant(tenant.tenantId);
+  }, 15_000);
+
+  it("registers at most two 'close' listeners per connection — no MaxListenersExceededWarning", async () => {
+    const tenant = await createTestTenant(app);
+    const ticket = await mintTicketFor(app, tenant.accessToken);
+    const warnSpy = vi.fn();
+    process.on("warning", warnSpy);
+
+    const conn = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+    await waitForMessage(conn.ws);
+    conn.ws.close();
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    process.removeListener("warning", warnSpy);
+    await cleanupTenant(tenant.tenantId);
   });
 });
