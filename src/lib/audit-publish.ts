@@ -12,6 +12,7 @@ export interface LiveExecutionEvent {
   status?: string;
   durationMs?: number;
   errorCode?: string;
+  denialReason?: string;
   timestamp: string; // ISO — pub/sub payloads are always plain JSON strings
 }
 
@@ -33,6 +34,10 @@ function buildLiveEvent(payload: AuditJobPayload): LiveExecutionEvent {
     event.status = payload.status;
     event.durationMs = payload.durationMs;
     if (payload.errorCode !== undefined) event.errorCode = payload.errorCode;
+  }
+
+  if (payload.eventType === "PERMISSION_DENIED") {
+    event.denialReason = payload.denialReason;
   }
 
   return event;

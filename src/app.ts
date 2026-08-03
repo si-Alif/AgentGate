@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyError } from "fastify";
 import sensible from "@fastify/sensible";
 import jwt from "@fastify/jwt";
+import fastifyWebsocket from "@fastify/websocket";
 
 import { env } from "./config/env.js";
 import tenantContextPlugin from "./plugins/tenant-context.plugin.js";
@@ -16,17 +17,30 @@ import { toolRoutes } from "./routes/tools.js";
 import { permissionRoutes } from "./routes/permissions.js";
 import { auditEventRoutes } from "./routes/audit-events.js";
 import { mcpGatewayRoutes } from "./routes/mcp.js";
+import { observabilityRoutes , observabilityStreamRoutes } from "./routes/observability.js";
 
 import { authenticate } from "./hooks/authenticate.hook.js";
 import { attachTenantContext } from "./hooks/attach-tenant-context.hook.js";
 import { requireActiveIdentity } from "./hooks/require-active-identity.hook.js";
 import { getTenantContext,getActiveUser } from "./lib/request-context.js";
-import { observabilityRoutes , observabilityStreamRoutes } from "./routes/observability.js";
-import fastifyWebsocket from "@fastify/websocket";
+import { redactTicketFromUrl } from "./lib/request-log-redaction.js";
+
 
 export async function createApp(): Promise<FastifyInstance> {
   const logger: Record<string, unknown> = {
     level: env.AGENTGATE_LOG_LEVEL,
+    serializers: {
+      req(request: any) {
+        return {
+          method: request.method,
+          url: redactTicketFromUrl(request.url),
+          version: request.raw?.httpVersion,
+          hostname: request.hostname,
+          remoteAddress: request.ip,
+          remotePort: request.socket?.remotePort,
+        };
+      },
+    },
   };
 
   if (env.AGENTGATE_NODE_ENV === "development") {
@@ -43,6 +57,7 @@ export async function createApp(): Promise<FastifyInstance> {
 
   const app = Fastify({
     logger,
+    trustProxy: env.AGENTGATE_TRUST_PROXY_HOPS > 0 ? env.AGENTGATE_TRUST_PROXY_HOPS : false,
     ajv: {
       customOptions: {
         removeAdditional: false, // REQUIRED for additionalProperties:false to actually
