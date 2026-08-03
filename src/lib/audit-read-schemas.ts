@@ -32,5 +32,6 @@ export const auditListQuerySchema = z.object({
   status: z.enum(AUDIT_STATUSES).optional(),
   agentId: z.string().optional(),
   toolId: z.string().optional(),
+  since: z.coerce.date().optional(), // 
 });
 export type AuditListQuery = z.infer<typeof auditListQuerySchema>;

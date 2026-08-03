@@ -57,6 +57,7 @@ const WS_CLOSE_REASON: Partial<Record<number, string>> = {
   [WS_CLOSE_CODE.HEARTBEAT_TIMEOUT]: "Heartbeat timeout",
   [WS_CLOSE_CODE.SERVICE_DEGRADED]: "Service temporarily degraded",
   [WS_CLOSE_CODE.TOO_MANY_CONNECTION_ATTEMPTS]: "Too many connection attempts — slow down and retry shortly",
+  [WS_CLOSE_CODE.POLICY_VIOLATION]: "Backpressure threshold exceeded",
 };
 
 export function buildConnectedFrame(tenantId: string): WsConnectedFrame {
@@ -105,6 +106,26 @@ export function rejectConnection(
 
 export function sendConnectedFrame(socket: Pick<WebSocket, "send">, tenantId: string): void {
   socket.send(JSON.stringify(buildConnectedFrame(tenantId)));
+}
+
+export function terminateUnresponsiveConnection(
+  socket: Pick<WebSocket,"send" | "terminate" | "readyState">,
+  code : WsCloseCodeValue = WS_CLOSE_CODE.HEARTBEAT_TIMEOUT,
+  message: string = WS_CLOSE_REASON[code] ?? "Connection terminated (unresponsive)"
+): void {
+  try {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(buildErrorFrame(code, message)));
+    }
+  }catch {
+    // Expected and harmless for an unresponsive peer — swallow.
+  }finally {
+    try {
+      socket.terminate();
+    }catch (err) {
+      console.warn("[ws-protocol] terminate() itself failed for an unresponsive connection:", err);
+    }
+  }
 }
 
 export function buildEventFrame(event : LiveExecutionEvent) : WsEventFrame {

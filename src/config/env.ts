@@ -62,6 +62,8 @@ const envSchema = z.object({
   AGENTGATE_WS_TICKET_ISSUE_RATE_LIMIT: z.coerce.number().int().positive().default(10),
   AGENTGATE_WS_MAX_CONNECTIONS_PER_USER: z.coerce.number().int().positive().default(5),
   AGENTGATE_WS_STREAM_CONNECT_RATE_LIMIT: z.coerce.number().int().positive().default(30),
+  AGENTGATE_WS_BACKPRESSURE_THRESHOLD_BYTES: z.coerce.number().int().positive().default(1_048_576),
+  AGENTGATE_WS_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
 });
 
 

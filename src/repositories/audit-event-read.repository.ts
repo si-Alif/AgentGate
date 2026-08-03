@@ -33,6 +33,7 @@ export async function listAuditEvents(
   if (query.agentId) where.agentId = query.agentId;
   if (query.toolId) where.toolId = query.toolId;
   if (query.status) where.status = query.status;
+  if (query.since) where.createdAt = { gte: query.since };
 
   if (cursor) {
     const cursorDate = new Date(cursor.createdAt);
