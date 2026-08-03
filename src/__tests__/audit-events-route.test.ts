@@ -77,6 +77,7 @@ describe("Audit Events Routes", () => {
 
     afterAll(async () => {
       await cleanupTenant(tenant.tenantId);
+      
     });
 
     it("returns a paginated list with lean rows", async () => {
@@ -219,6 +220,62 @@ describe("Audit Events Routes", () => {
       } finally {
         await cleanupTenant(otherTenant.tenantId);
       }
+    });
+    describe("GET /audit-events — `since` filter (Week 7 Day 4)", () => {
+      it("GATE — returns only events at or after the given `since` timestamp", async () => {
+        const oldEventId = crypto.randomUUID();
+        const newEventId = crypto.randomUUID();
+        const boundary = new Date("2026-06-15T00:00:00.000Z");
+
+        await prisma.auditEvent.create({
+          data: {
+            id: oldEventId,
+            tenantId: tenant.tenantId,
+            agentId: agent.id,
+            toolId: tool.id,
+            eventType: "TOOL_INVOCATION",
+            status: "success",
+            payload: { schemaVersion: 1 },
+            createdAt: new Date("2026-06-01T00:00:00.000Z"),
+          },
+        });
+        await prisma.auditEvent.create({
+          data: {
+            id: newEventId,
+            tenantId: tenant.tenantId,
+            agentId: agent.id,
+            toolId: tool.id,
+            eventType: "TOOL_INVOCATION",
+            status: "success",
+            payload: { schemaVersion: 1 },
+            createdAt: new Date("2026-07-01T00:00:00.000Z"),
+          },
+        });
+
+        const res = await app.inject({
+          method: "GET",
+          // ADDED: limit=10 and encodeURIComponent
+          url: `/api/audit-events?limit=10&since=${encodeURIComponent(boundary.toISOString())}`,
+          headers: { Authorization: `Bearer ${tenant.accessToken}` },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const ids = JSON.parse(res.body).data.map((r: any) => r.id);
+        expect(ids).toContain(newEventId);
+        expect(ids).not.toContain(oldEventId);
+      });
+
+      it("an invalid `since` value returns 400, not a silently-ignored filter", async () => {
+        const res = await app.inject({
+          method: "GET",
+          // ADDED: limit=10 here as well to ensure it fails specifically because of `since`
+          url: "/api/audit-events?limit=10&since=not-a-real-date",
+          headers: { Authorization: `Bearer ${tenant.accessToken}` },
+        });
+
+        console.log("FASTIFY 400 ERROR BODY:", res.body);
+        expect(res.statusCode).toBe(400);
+      });
     });
   });
 
@@ -469,4 +526,6 @@ describe("Audit Events Routes", () => {
       expect(res.statusCode).toBe(429);
     });
   });
+
 });
+

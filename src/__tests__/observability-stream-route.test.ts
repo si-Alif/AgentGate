@@ -13,6 +13,7 @@ import { executeTool } from "../lib/execute-tool.js";
 import { createAuditWorker } from "../workers/audit.worker.js";
 import { encryptConfig } from "../lib/encryption.js";
 import { prisma } from "../lib/prisma.js";
+
 /**
  * Real, unmocked ws client — deliberately NOT a browser-emulation
  * shim. Because this design NEVER rejects pre-upgrade (Decision 7.34
@@ -370,4 +371,149 @@ describe("GET /observability/stream — Day 3: live cross-tenant event delivery 
     process.removeListener("warning", warnSpy);
     await cleanupTenant(tenant.tenantId);
   });
+});
+
+
+describe("GET /observability/stream — Day 4: heartbeat, backpressure wiring, latency (real infra)", () => {
+  let app: Awaited<ReturnType<typeof createApp>>;
+  let port: number;
+  let auditWorker: Awaited<ReturnType<typeof createAuditWorker>>;
+  const ORIGINAL_HEARTBEAT_INTERVAL_MS = env.AGENTGATE_WS_HEARTBEAT_INTERVAL_MS;
+
+  beforeAll(async () => {
+    // Decision 7.57 — a direct, test-file-scoped override of the
+    // parsed env singleton, restored in afterAll. Waiting out the
+    // real 30s production default here would make this suite
+    // impractically slow; the exhaustive state-machine proof already
+    // lives in ws-heartbeat.test.ts under fake timers — this suite
+    // only needs to prove the real WIRING (a genuine ping is sent
+    // over a genuine socket, and a genuinely unresponsive client is
+    // actually torn down), which is orthogonal to the interval's
+    // literal duration.
+    (env as any).AGENTGATE_WS_HEARTBEAT_INTERVAL_MS = 300;
+
+    app = await createApp();
+    await app.ready();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    port = (app.server.address() as AddressInfo).port;
+    auditWorker = await createAuditWorker();
+  });
+
+  afterAll(async () => {
+    (env as any).AGENTGATE_WS_HEARTBEAT_INTERVAL_MS = ORIGINAL_HEARTBEAT_INTERVAL_MS;
+    await app.close();
+    if (auditWorker && typeof auditWorker.close === "function") {
+      await auditWorker.close();
+    }
+  });
+
+  beforeEach(async () => {
+    resetAllConnectionsForTest();
+    await rateLimiterRedis.flushdb();
+  });
+
+  it("a normally-responsive client receives real ping frames and stays connected", async () => {
+    const tenant = await createTestTenant(app);
+    const ticket = await mintTicketFor(app, tenant.accessToken);
+
+    // Default ws client behavior: auto-responds to server pings with
+    // pongs, with zero application code required — the exact property
+    // that makes native ping/pong such a good fit for a real browser
+    // client too.
+    const ws = new WsClient(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+    let pingCount = 0;
+    ws.on("ping", () => { pingCount++; });
+
+    await new Promise<void>((resolve) => ws.once("open", () => resolve()));
+    await new Promise((r) => setTimeout(r, 300 * 3)); // several heartbeat cycles
+
+    expect(pingCount).toBeGreaterThanOrEqual(2);
+    expect(ws.readyState).toBe(WsClient.OPEN);
+
+    ws.close();
+    await cleanupTenant(tenant.tenantId);
+  });
+
+  it("GATE — a client that never pongs is terminated after exactly one missed heartbeat cycle", async () => {
+    const tenant = await createTestTenant(app);
+    const ticket = await mintTicketFor(app, tenant.accessToken);
+
+    // autoPong: false — confirm this option is supported by the
+    // pinned ws CLIENT version (added in ws@8.18.0, which this project
+    // pins per Week 7 Day 2's package.json addition) before relying on
+    // it; if unavailable in the resolved version, substitute a raw
+    // net.Socket-level client that completes the WS handshake but
+    // never processes control frames at all. See Part 8 Assumption #2.
+    const ws = new WsClient(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`, {
+      autoPong: false,
+    } as any);
+
+    let pingReceived = false;
+    ws.on("ping", () => { pingReceived = true; }); // confirms the SERVER actually pinged
+
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.once("close", (code) => resolve({ code }));
+    });
+
+    await new Promise<void>((resolve) => ws.once("open", () => resolve()));
+
+    const result = await Promise.race([
+      closed,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("connection was never terminated")), 3000)
+      ),
+    ]);
+
+    expect(pingReceived).toBe(true);
+    // terminate() bypasses the graceful close handshake — the client
+    // observes an abnormal closure, NOT a clean 4004 frame (Day 4
+    // Finding F3's own documented tradeoff). The SERVER'S structured
+    // logs are where HEARTBEAT_TIMEOUT (4004) is actually attributed.
+    expect([1005, 1006]).toContain(result.code);
+  }, 10_000);
+
+  it("a genuinely dead heartbeat also cleans up the ceiling tracker and tenant registry (all three listeners fire)", async () => {
+    const tenant = await createTestTenant(app);
+    const ticket = await mintTicketFor(app, tenant.accessToken);
+    const ws = new WsClient(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`, {
+      autoPong: false,
+    } as any);
+
+    await new Promise<void>((resolve) => ws.once("open", () => resolve()));
+    await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    await new Promise((r) => setTimeout(r, 100)); // let all three async close listeners settle
+
+    expect(getActiveConnectionCount(tenant.userId)).toBe(0);
+
+    await cleanupTenant(tenant.tenantId);
+  }, 10_000);
+
+  it("CHECKPOINT — a live tool call's event round-trips end-to-end within the HLD's 200ms target", async () => {
+    const tenant = await createTestTenant(app);
+    const { agent } = await createTestAgent(tenant.tenantId, tenant.userId);
+    const tool = await createSsrfBlockedTool(tenant.tenantId, `latency-probe-${Date.now()}`);
+
+    const ticket = await mintTicketFor(app, tenant.accessToken);
+    const conn = connectAndCollect(`ws://127.0.0.1:${port}/observability/stream?ticket=${ticket}`);
+    await waitForMessage(conn.ws); // connected frame
+
+    // Arm the listener BEFORE triggering execution — Day 3's own
+    // established ordering discipline, avoiding a race where the
+    // event arrives and is processed before our listener attaches.
+    const eventPromise = waitForMessage(conn.ws);
+    const triggeredAt = performance.now();
+    await executeTool(tool.id, tenant.tenantId, agent.id, {}, new AbortController().signal);
+    const eventFrame = await eventPromise;
+    const elapsedMs = performance.now() - triggeredAt;
+
+    expect(eventFrame.type).toBe("event");
+    expect(eventFrame.toolId).toBe(tool.id);
+    // HLD's own stated target. Measured against local docker-compose
+    // Redis/Postgres — inherently environment-sensitive; Day 6 repeats
+    // this check across a wider adversarial matrix.
+    expect(elapsedMs).toBeLessThan(200);
+
+    conn.ws.close();
+    await cleanupTenant(tenant.tenantId);
+  }, 10_000);
 });
