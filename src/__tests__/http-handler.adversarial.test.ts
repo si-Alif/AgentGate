@@ -9,7 +9,7 @@ describe("executeHttpHandler — literal-IP SSRF regression (Day 6, THE critical
       {},
       new AbortController().signal
     );
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("ssrf_blocked");
     expect(result.error).toMatch(/^SSRF blocked/);
   });
 
@@ -19,7 +19,7 @@ describe("executeHttpHandler — literal-IP SSRF regression (Day 6, THE critical
       {},
       new AbortController().signal
     );
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("ssrf_blocked");
     expect(result.error).toMatch(/^SSRF blocked/);
   });
 });
