@@ -131,6 +131,9 @@ export async function closeConnectionForShutdown(
     }catch (err) {
       console.warn("[ws-protocol] close() failed during shutdown, will fall back to terminate() on timeout:", err);
     }
+    if (typeof socket.once !== "function") {
+      finish();
+    }
 
   })
 
@@ -153,7 +156,10 @@ export function terminateUnresponsiveConnection(
     }catch (err) {
       console.warn("[ws-protocol] terminate() itself failed for an unresponsive connection:", err);
     }
+
   }
+
+
 }
 
 export function buildEventFrame(event : LiveExecutionEvent) : WsEventFrame {
