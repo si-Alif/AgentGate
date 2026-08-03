@@ -1,7 +1,7 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import { CircuitBreaker, type BreakState } from "./circuit-breaker.js";
-
+import * as self from "./rate-limiter.js"; // <-- Add this self-import
 
 export interface RateLimitResult {
   allowed : boolean;
@@ -120,7 +120,7 @@ export async function checkRateLimit(
 }
 
 export async function checkRateLimitByKey(key: string, limit: number): Promise<RateLimitResult> {
-  return checkRateLimitByNameSpace(AUDIT_EVENTS_READ_NAMESPACE, key, limit);
+  return self.checkRateLimitByNameSpace(AUDIT_EVENTS_READ_NAMESPACE, key, limit);
 }
 
 export async function checkRateLimitByNameSpace(
