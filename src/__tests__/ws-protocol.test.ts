@@ -5,10 +5,22 @@ import {
   rejectConnection,
   sendConnectedFrame,
   WS_CLOSE_CODE,
+  buildEventFrame,
+  sendEventFrame
 } from "../observability/ws-protocol.js";
+import type { LiveExecutionEvent } from "../lib/audit-publish.js";
 
 function fakeSocket(readyState: number) {
   return { readyState, send: vi.fn(), close: vi.fn() };
+}
+
+function sampleEvent(overrides: Partial<LiveExecutionEvent> = {}): LiveExecutionEvent {
+  return {
+    id: "evt-1", tenantId: "tenant-1", eventType: "TOOL_INVOCATION",
+    agentId: "agent-1", toolId: "tool-1", status: "success", durationMs: 42,
+    timestamp: new Date().toISOString(),
+    ...overrides,
+  };
 }
 
 describe("buildConnectedFrame", () => {
@@ -87,5 +99,44 @@ describe("sendConnectedFrame", () => {
     const frame = JSON.parse((socket.send as any).mock.calls[0][0]);
     expect(frame.type).toBe("connected");
     expect(frame.tenantId).toBe("tenant-abc");
+  });
+});
+
+describe("buildEventFrame — Day 3, Decision 7.42", () => {
+  it("flat-merges {type: 'event'} with the LiveExecutionEvent — no nested wrapper", () => {
+    const event = sampleEvent();
+    const frame = buildEventFrame(event);
+    expect(frame.type).toBe("event");
+    expect(frame.id).toBe(event.id);
+    expect(frame.tenantId).toBe(event.tenantId);
+    expect((frame as any).event).toBeUndefined(); // proves NO nested wrapper
+  });
+
+  it("carries optional fields through untouched when present", () => {
+    const frame = buildEventFrame(sampleEvent({ errorCode: "TIMEOUT" }));
+    expect(frame.errorCode).toBe("TIMEOUT");
+  });
+
+  it("omits optional fields entirely when absent on the source event", () => {
+    const minimal: LiveExecutionEvent = {
+      id: "evt-2", tenantId: "tenant-2", eventType: "AGENT_AUTHENTICATED",
+      timestamp: new Date().toISOString(),
+    };
+    const frame = buildEventFrame(minimal);
+    expect("agentId" in frame).toBe(false);
+    expect("toolId" in frame).toBe(false);
+    expect("status" in frame).toBe(false);
+  });
+});
+
+describe("sendEventFrame", () => {
+  it("sends exactly one message shaped as an event frame", () => {
+    const socket = { send: vi.fn() };
+    const event = sampleEvent();
+    sendEventFrame(socket as any, event);
+    expect(socket.send).toHaveBeenCalledTimes(1);
+    const frame = JSON.parse((socket.send as any).mock.calls[0][0]);
+    expect(frame.type).toBe("event");
+    expect(frame.id).toBe(event.id);
   });
 });
