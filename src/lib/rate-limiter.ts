@@ -39,6 +39,7 @@ declare module "ioredis" {
 };
 
 export const RATE_LIMIT_KEY_TTL_SECONDS = 120;
+const AUDIT_EVENTS_READ_NAMESPACE = "audit-events-read";
 
 
 rateLimiterRedis.defineCommand("rateLimitIncr", {
@@ -118,33 +119,8 @@ export async function checkRateLimit(
 
 }
 
-export async function checkRateLimitByKey(
-  key: string,
-  limit: number
-): Promise<RateLimitResult> {
-  if (!rateLimiterCircuitBreaker.canAttempt()) {
-    console.warn("[rate-limiter] circuit OPEN — failing closed");
-    return { allowed: false, remaining: 0, degraded: true };
-  }
-
-  const fullKey = `rate:key:${key}:min:${Math.floor(Date.now() / 60_000)}`;
-  try {
-    const currentCount = await rateLimiterRedis.rateLimitIncr(
-      fullKey,
-      RATE_LIMIT_KEY_TTL_SECONDS
-    );
-    rateLimiterCircuitBreaker.onSuccess();
-    const { allowed, remaining } = evaluateRateLimit(currentCount, limit);
-    return { allowed, remaining, degraded: false };
-  } catch (err) {
-    rateLimiterCircuitBreaker.onFailure();
-    if (rateLimiterCircuitBreaker.getState() === "OPEN") {
-      console.error("[rate-limiter] breaker tripped OPEN:", err);
-      return { allowed: false, remaining: 0, degraded: true };
-    }
-    console.warn("[rate-limiter] degraded — failing open (below trip threshold):", err);
-    return { allowed: true, remaining: limit, degraded: true };
-  }
+export async function checkRateLimitByKey(key: string, limit: number): Promise<RateLimitResult> {
+  return checkRateLimitByNameSpace(AUDIT_EVENTS_READ_NAMESPACE, key, limit);
 }
 
 export async function checkRateLimitByNameSpace(
