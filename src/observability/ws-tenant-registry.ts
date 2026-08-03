@@ -2,7 +2,8 @@ import { WebSocket } from "ws";
 import { redis } from "../lib/redis.js";
 import { tenantEventChannelName } from "../lib/audit-publish.js";
 import type { LiveExecutionEvent } from "../lib/audit-publish.js";
-import { sendEventFrame } from "./ws-protocol.js";
+import { sendEventFrame, rejectConnection, WS_CLOSE_CODE } from "./ws-protocol.js";
+import { env } from "../config/env.js";
 
 /**
  * The reference-counted bridge between Redis pub/sub and this
@@ -145,11 +146,18 @@ export function dispatchTenantMessage(channel: string, message: string): void {
     return;
   }
 
-  for (const socket of viewers) {
+  for (const socket of Array.from(viewers)) {
     try {
-      if (socket.readyState === WebSocket.OPEN) {
-        sendEventFrame(socket, event);
+      if (socket.readyState !== WebSocket.OPEN) {
+        continue; // mirrors ws-connection-tracker.ts's own cleanup discipline
       }
+
+      if(socket.bufferedAmount > env.AGENTGATE_WS_BACKPRESSURE_THRESHOLD_BYTES) {
+        rejectConnection(socket, WS_CLOSE_CODE.POLICY_VIOLATION);
+        continue;
+      }
+
+      sendEventFrame(socket, event);
     } catch (err) {
       console.warn(
         `[ws-tenant-registry] failed to deliver a live event to one viewer of tenant ${tenantId} ` +

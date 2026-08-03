@@ -12,6 +12,7 @@ import type { WsTicketPayload } from "../observability/ws-ticket.js";
 import { registerConnection, deregisterConnection } from "../observability/ws-connection-tracker.js";
 import { rejectConnection, sendConnectedFrame, WS_CLOSE_CODE } from "../observability/ws-protocol.js";
 import { registerTenantViewer, deregisterTenantViewer } from "../observability/ws-tenant-registry.js";
+import { startHeartbeat, stopHeartbeat } from "../observability/ws-heartbeat.js";
 
 const WS_TICKET_RATE_NAMESPACE = "ws-ticket";
 const CONNECT_RATE_NAMESPACE = "ws-stream-connect";
@@ -244,6 +245,16 @@ async function handleStreamUpgrade(socket: WebSocket, request: FastifyRequest): 
     socket.once("close", () => {
       deregisterTenantViewer(resolvedIdentity.tenantId, socket);
     });
+
+    // 6. Start the heartbeat — mirrors the ordering of every other
+    //    per-connection setup step in this function. The heartbeat
+    //    module owns its own state, never merged with the ceiling
+    //    tracker or tenant registry, and is independently idempotent.
+    startHeartbeat(socket);
+
+    socket.once("close", () => {
+      stopHeartbeat(socket);
+    })
 
     sendConnectedFrame(socket, resolvedIdentity.tenantId);
     // Day 4 adds a bufferedAmount backpressure gate around
