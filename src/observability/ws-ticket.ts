@@ -46,7 +46,13 @@ export interface MintedWsTicket {
 }
 
 export function ticketKey(ticketId: string): string {
+
   return `${TICKET_KEY_PREFIX}:${ticketId}`;
+}
+export async function redeemWsTicket(ticketId: string): Promise<WsTicketPayload | null> {
+  const raw = await rateLimiterRedis.getdel(ticketKey(ticketId));
+  if (!raw) return null;
+  return JSON.parse(raw) as WsTicketPayload;
 }
 
 /**

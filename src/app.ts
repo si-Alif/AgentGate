@@ -21,7 +21,8 @@ import { authenticate } from "./hooks/authenticate.hook.js";
 import { attachTenantContext } from "./hooks/attach-tenant-context.hook.js";
 import { requireActiveIdentity } from "./hooks/require-active-identity.hook.js";
 import { getTenantContext,getActiveUser } from "./lib/request-context.js";
-import { observabilityRoutes } from "./routes/observability.js";
+import { observabilityRoutes , observabilityStreamRoutes } from "./routes/observability.js";
+import fastifyWebsocket from "@fastify/websocket";
 
 export async function createApp(): Promise<FastifyInstance> {
   const logger: Record<string, unknown> = {
@@ -96,6 +97,11 @@ export async function createApp(): Promise<FastifyInstance> {
   });
 
   await app.register(tenantContextPlugin);
+  await app.register(fastifyWebsocket,{
+    options :{
+      clientTracking: false,
+    }
+  });
 
   // ═══════════════════════════════════════════════════════
   // Phase 2 — Public routes (no auth)
@@ -106,6 +112,7 @@ export async function createApp(): Promise<FastifyInstance> {
   await app.register(loginRoutes, { prefix: "/auth" });
   await app.register(refreshRoutes, { prefix: "/auth" });
   await app.register(logoutRoutes, { prefix: "/auth" });
+  await app.register(observabilityStreamRoutes, { prefix: "/observability" });
 
   // ═══════════════════════════════════════════════════════
   // Phase 3 — Protected REST scope (JWT + TenantContext)
