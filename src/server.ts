@@ -10,6 +10,7 @@ import { createAuditWorker } from "./workers/audit.worker.js";
 import { auditQueue, deadLetterAuditQueue } from "./queue/audit.queue.js";
 import { auditPrisma } from "./lib/audit-prisma.js";
 import { withTimeout } from "./lib/timeout.js";
+import { closeAllObservabilityConnections, closeTenantEventSubscriber } from "./observability/ws-tenant-registry.js";
 
 async function startServer() {
   const app = await createApp();
@@ -23,6 +24,18 @@ async function startServer() {
   const shutdown = async (signal: string) => {
     app.log.info(`Received ${signal} — initiating graceful shutdown...`);
     try {
+      app.log.info("Closing observability WebSocket connections...");
+      await closeAllObservabilityConnections();
+
+      app.log.info("Closing tenant-event subscriber connection...");
+      try {
+        await withTimeout(() => closeTenantEventSubscriber(), 3000);
+      }catch (err) {
+        app.log.warn({ err }, "tenantEventSubscriber close timed out or failed — continuing shutdown");
+      }
+
+
+
       await app.close();            // 1. stop new HTTP/SSE
 
       await emailWorker.close();    // 2. drain email

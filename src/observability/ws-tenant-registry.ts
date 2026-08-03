@@ -2,33 +2,12 @@ import { WebSocket } from "ws";
 import { redis } from "../lib/redis.js";
 import { tenantEventChannelName } from "../lib/audit-publish.js";
 import type { LiveExecutionEvent } from "../lib/audit-publish.js";
-import { sendEventFrame, rejectConnection, WS_CLOSE_CODE } from "./ws-protocol.js";
+import { sendEventFrame, rejectConnection, WS_CLOSE_CODE, closeConnectionForShutdown } from "./ws-protocol.js";
 import { env } from "../config/env.js";
+import { withTimeout } from "../lib/timeout.js";
+import { TimeoutError } from "../handlers/types.js";
 
-/**
- * The reference-counted bridge between Redis pub/sub and this
- * replica's locally-held dashboard WebSocket connections.
- *
- * ONE dedicated subscriber-mode connection per replica, built via
- * redis.duplicate() off the SHARED lib/redis.ts client — deliberately
- * NOT rateLimiterRedis.duplicate() (Day 3 Finding F1 / Decision 7.41).
- * rateLimiterRedis is tuned fail-fast (maxRetriesPerRequest: 1,
- * commandTimeout: 1000ms) for point-in-time rate-limit checks; a
- * long-lived subscriber has no "check" to fail fast on — it should
- * retry indefinitely, exactly what redis.ts's maxRetriesPerRequest:
- * null already gives it, and exactly what BullMQ already depends on
- * that same setting for. Duplicating from redis.ts also means this
- * connects to the identical Redis target/auth/TLS configuration as
- * the PUBLISH side (audit-publish.ts), with zero extra config to keep
- * in sync.
- *
- * Once a connection issues SUBSCRIBE it can no longer issue ordinary
- * commands — this is why a genuinely separate connection instance is
- * structurally required, not merely preferred (the same reason the
- * rate limiter needed its own client, Week 3 — a different underlying
- * cause there: conflicting reliability settings; here: Redis's own
- * subscriber-mode command restriction).
- */
+
 export const tenantEventSubscriber = redis.duplicate();
 
 tenantEventSubscriber.on("error", (err: Error) => {
@@ -38,25 +17,22 @@ tenantEventSubscriber.on("error", (err: Error) => {
 tenantEventSubscriber.on("message", dispatchTenantMessage);
 
 const viewersByTenant = new Map<string, Set<WebSocket>>();
+export type ObservabilityStreamHealthReason =
+  | "HEALTHY"
+  | "SUBSCRIBER_NOT_READY"
+  | "PING_TIMEOUT"
+  | "PING_ERROR";
 
-/**
- * Synchronous check-then-mutate, mirroring ws-connection-tracker.ts's
- * own registerConnection() reasoning (Week 7 Day 2): Node's single-
- * threaded event loop means there is no `await` between reading
- * `wasEmpty` and mutating the Set, so two "simultaneous" registrations
- * for the same tenant are still processed one full synchronous turn
- * at a time — SUBSCRIBE fires on the empty -> nonempty transition
- * ONLY, never twice for concurrent joiners.
- *
- * The actual SUBSCRIBE call is fire-and-forget (Decision 7.46) —
- * mirrors enqueueAuditEvent()'s established "never await" contract
- * (Week 4/5). Registration must never block the connection handshake
- * waiting on a Redis round trip; delivery is already a best-effort
- * contract (Week 5's own accepted posture), so a brief window where
- * the local bookkeeping exists slightly ahead of the actual Redis
- * subscription is an acceptable, bounded imprecision, not a
- * correctness bug.
- */
+export interface ObservabilityStreamHealth {
+  healthy: boolean;
+  reason: ObservabilityStreamHealthReason;
+  subscribedTenantCount: number;
+  totalViewerCount: number;
+}
+
+const OBSERVABILITY_HEALTH_PING_TIMEOUT_MS = 2_000; // matches getAuditHealth()'s own METRICS_TIMEOUT_MS precedent
+
+
 export function registerTenantViewer(tenantId: string, socket: WebSocket): void {
   const existing = viewersByTenant.get(tenantId);
   const wasEmpty = !existing || existing.size === 0;
@@ -80,20 +56,7 @@ export function registerTenantViewer(tenantId: string, socket: WebSocket): void 
   }
 }
 
-/**
- * The single cleanup authority for THIS module's state — a sibling to,
- * never merged with, ws-connection-tracker.ts's own
- * deregisterConnection() (Decision 7.45, resolving Day 2's own
- * forward note). The two modules own fully disjoint state with no
- * ordering dependency between them, so a socket's 'close' event
- * triggers BOTH cleanup functions via two independent .once()
- * listeners registered at the route-handler level
- * (routes/observability.ts), rather than funneling through one shared
- * coordinator neither module needs.
- *
- * Idempotent: deregistering a socket never registered under this
- * tenantId, or already removed, is a safe no-op.
- */
+
 export function deregisterTenantViewer(tenantId: string, socket: WebSocket): void {
   const existing = viewersByTenant.get(tenantId);
   if (!existing) return;
@@ -120,11 +83,6 @@ export function deregisterTenantViewer(tenantId: string, socket: WebSocket): voi
  * at module load — ALL channels this connection is subscribed to
  * funnel through this ONE handler; dispatch by `channel` is this
  * function's entire job.
- *
- * Checks the local registry BEFORE parsing the payload — Day 3's own
- * proof checkpoint ("a tenant with zero current viewers never has its
- * events... even parsed locally") is enforced structurally here, not
- * merely observed as a side effect.
  */
 export function dispatchTenantMessage(channel: string, message: string): void {
   const tenantId = parseTenantIdFromChannel(channel);
@@ -195,6 +153,62 @@ export function getSubscribedTenantCount(): number {
 export async function closeTenantEventSubscriber(): Promise<void> {
   await tenantEventSubscriber.quit();
 }
+
+export function getAllRegisteredSockets(): WebSocket[] {
+  const all = new Set<WebSocket>();
+    for (const set of viewersByTenant.values()) {
+      for (const socket of set) all.add(socket);
+    }
+  return Array.from(all);
+}
+
+// Diagnostic-only — aggregate viewer count across every tenant on this replica.
+export function getTotalViewerCount(): number {
+  let total = 0;
+
+  for (const set of viewersByTenant.values()) total += set.size;
+
+  return total;
+}
+
+
+export async function closeAllObservabilityConnections(graceMs?: number): Promise<void> {
+  const sockets = getAllRegisteredSockets();
+  await Promise.all(sockets.map((socket) => closeConnectionForShutdown(socket, graceMs)));
+}
+
+export async function getObservabilityStreamHealth(): Promise<ObservabilityStreamHealth> {
+  try {
+    if (tenantEventSubscriber.status !== "ready") {
+      return {
+        healthy: false,
+        reason: "SUBSCRIBER_NOT_READY",
+        subscribedTenantCount: getSubscribedTenantCount(),
+        totalViewerCount: getTotalViewerCount(),
+      };
+    }
+    try {
+      await withTimeout(() => tenantEventSubscriber.ping(), OBSERVABILITY_HEALTH_PING_TIMEOUT_MS);
+    } catch (err: unknown) {
+      const reason: ObservabilityStreamHealthReason = err instanceof TimeoutError ? "PING_TIMEOUT" : "PING_ERROR";
+      return {
+        healthy: false,
+        reason,
+        subscribedTenantCount: getSubscribedTenantCount(),
+        totalViewerCount: getTotalViewerCount(),
+      };
+    }
+    return {
+      healthy: true,
+      reason: "HEALTHY",
+      subscribedTenantCount: getSubscribedTenantCount(),
+      totalViewerCount: getTotalViewerCount(),
+    };
+  }catch (_unexpected) {
+    return { healthy: false, reason: "PING_ERROR", subscribedTenantCount: 0, totalViewerCount: 0 };
+  }
+}
+
 
 /** Test-only: full reset between test cases. Never called in production. */
 export async function resetTenantRegistryForTest(): Promise<void> {
