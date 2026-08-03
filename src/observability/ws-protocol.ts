@@ -2,26 +2,14 @@ import { WebSocket } from "ws";
 import type { LiveExecutionEvent } from "../lib/audit-publish.js";
 
 
-/**
- *
- * The full, closed wire-protocol vocabulary for /observability/stream
- * — Part 4 of roadmap_w7.md, made real starting today. Every rejection
- * path anywhere in this week's WS surface maps to exactly one of these
- * — this project's standing "no known signal falls through to a
- * generic/uncoded response" invariant (Week 6 Day 1's JSON-RPC error
- * taxonomy), now applied to WebSocket close codes.
- */
 
+const WS_SHUTDOWN_GRACE_MS = 3000;
 export type WsFrameType = "connected" | "event" | "error";
 
 export interface WsConnectedFrame {
   type: "connected";
   serverTime: string; // ISO 8601
   tenantId: string;
-  // Deliberately NOT userId, NOT role — Part 4.1's own documented
-  // shape is exactly these three fields. See Day 1's own Forward
-  // Note flagging this exactness requirement, now enforced by the
-  // builder below and proven by a dedicated test.
 }
 
 export interface WsErrorFrame {
@@ -106,6 +94,46 @@ export function rejectConnection(
 
 export function sendConnectedFrame(socket: Pick<WebSocket, "send">, tenantId: string): void {
   socket.send(JSON.stringify(buildConnectedFrame(tenantId)));
+}
+
+export async function closeConnectionForShutdown(
+  socket: Pick<WebSocket, "send" | "close" | "terminate" | "readyState" | "once">,
+  graceMs: number = WS_SHUTDOWN_GRACE_MS
+): Promise < void> {
+  if (socket.readyState === WebSocket.CLOSED) return;
+
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> ;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      resolve();
+    };
+
+    socket.once("close", finish);
+    timer = setTimeout(()=>{
+      if (settled) return;
+      try {
+        socket.terminate();
+      }catch (err) {
+        console.warn("[ws-protocol] terminate() fallback failed during shutdown:", err);
+      }
+      finish();
+    } , graceMs);
+
+    try {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.close(WS_CLOSE_CODE.GOING_AWAY, "Server shutting down");
+      }
+    }catch (err) {
+      console.warn("[ws-protocol] close() failed during shutdown, will fall back to terminate() on timeout:", err);
+    }
+
+  })
+
 }
 
 export function terminateUnresponsiveConnection(
