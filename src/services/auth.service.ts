@@ -6,7 +6,8 @@ import { tenantRepository } from "../repositories/tenant.repository.js";
 import { userRepository } from "../repositories/user.repository.js";
 import { emailQueue } from "../queue/email.queue.js";
 import { PASSWORD_PEPPER, REFRESH_TOKEN_SECRET } from "../config/env.js";
-import {assertValidRole} from "../lib/role.js"
+import {assertValidRole} from "../lib/role.js";
+import { enqueueVerificationEmail } from '../queue/email.queue.js';
 
 import type { FastifyInstance } from "fastify";
 
@@ -46,8 +47,7 @@ export const authService = {
         return { tenant, user };
       });
 
-      emailQueue.add("verification", { type: "verification", email: data.ownerEmail, token: verificationToken })
-        .catch((err) => console.error("[EMAIL QUEUE] Failed to enqueue:", err));
+      enqueueVerificationEmail({ userId: res.user.id, email: res.user.email, token: verificationToken });
 
       return { tenant: res.tenant, user: { id: res.user.id, email: res.user.email, role: res.user.role } };
     } catch (err) {

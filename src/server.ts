@@ -1,10 +1,11 @@
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
-import { emailQueue } from "./queue/email.queue.js";
-import { createEmailWorker } from "./workers/email.worker.js";
 import { redis } from "./lib/redis.js";
 import { prisma } from "./lib/prisma.js";
 import { rateLimiterRedis } from "./lib/rate-limiter.js";
+import { emailQueue } from "./queue/email.queue.js";
+import { createEmailWorker } from "./workers/email.worker.js";
+import { deadLetterEmailQueue } from "./queue/email.queue.js";
 import {closeSafeAgent} from "./lib/safe-agent.js"
 import { createAuditWorker } from "./workers/audit.worker.js";
 import { auditQueue, deadLetterAuditQueue } from "./queue/audit.queue.js";
@@ -40,6 +41,7 @@ async function startServer() {
 
       await emailWorker.close();    // 2. drain email
       await emailQueue.close();
+      await deadLetterEmailQueue.close();
 
       // 3. Bounded audit worker shutdown
       app.log.info("Draining audit worker...");
