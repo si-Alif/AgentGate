@@ -1,6 +1,6 @@
 import { describe, it, expect , vi} from "vitest";
 import crypto from "node:crypto";
-import { checkRateLimitByNameSpace , checkRateLimitByKey , rateLimiterRedis } from "../lib/rate-limiter.js";
+import { checkRateLimitByNameSpace, checkRateLimitByKey, rateLimiterRedis, resetRateLimitKeyForTest } from "../lib/rate-limiter.js";
 import * as rateLimiterModule from "../lib/rate-limiter.js";
 
 describe("checkRateLimitByKey — namespace isolation", () => {
@@ -68,5 +68,24 @@ describe("checkRateLimitByKey — Week 7 Day 5, Decision 7.61", () => {
     const result = await checkRateLimitByKey(crypto.randomUUID(), 100);
     expect(result).toEqual({ allowed: false, remaining: 0, degraded: true });
     breaker.reset();
+  });
+});
+
+describe("resetRateLimitKeyForTest — Week 8 Day 2, Decision 8.44", () => {
+  it("GATE — deletes the specific key, giving the next check a fresh window", async () => {
+    const id = crypto.randomUUID();
+    const first = await checkRateLimitByNameSpace("test-ns-w8d2", id, 1);
+    expect(first.allowed).toBe(true);
+    const second = await checkRateLimitByNameSpace("test-ns-w8d2", id, 1);
+    expect(second.allowed).toBe(false); // limit=1, already consumed this window
+
+    await resetRateLimitKeyForTest("test-ns-w8d2", id);
+
+    const third = await checkRateLimitByNameSpace("test-ns-w8d2", id, 1);
+    expect(third.allowed).toBe(true); // fresh again, without waiting out the real 60s window
+  });
+
+  it("resetting a never-consumed key is a safe no-op", async () => {
+    await expect(resetRateLimitKeyForTest("test-ns-w8d2", crypto.randomUUID())).resolves.toBeUndefined();
   });
 });
