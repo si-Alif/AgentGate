@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { authService } from "../../services/auth.service.js";
+import { createPublicAuthThrottleHook } from "../../lib/public-auth-throttle.js";
 
 export async function loginRoutes(app: FastifyInstance) {
   app.post(
     "/login",
     {
+    onRequest: [createPublicAuthThrottleHook("login")],
       schema: {
         body: {
           type: "object",
