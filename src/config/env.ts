@@ -17,13 +17,16 @@ const envSchema = z.object({
   AGENTGATE_PORT: z.coerce.number().default(4000),
   AGENTGATE_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   AGENTGATE_NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
-  // ═══════════════════════════════════════════════════════
-  // Week 1 — SMTP (uncomment when email verification is built)
-  // ═══════════════════════════════════════════════════════
-  // AGENTGATE_SMTP_HOST: z.string().default("localhost"),
-  // AGENTGATE_SMTP_PORT: z.coerce.number().default(587),
-  // AGENTGATE_SMTP_USER: z.string().default(""),
-  // AGENTGATE_SMTP_PASS: z.string().default(""),
+
+
+  // ── Email delivery (closes Finding W8-1) ──────────────────────────
+  AGENTGATE_EMAIL_PROVIDER: z.enum(["console", "sendgrid"]).default("console"),
+  AGENTGATE_SENDGRID_API_KEY: z.string().min(1).optional(),
+  AGENTGATE_EMAIL_FROM_ADDRESS: z.string().email().default("noreply@agentgate.dev"),
+  AGENTGATE_EMAIL_FROM_NAME: z.string().min(1).default("AgentGate"),
+  AGENTGATE_APP_BASE_URL: z.string().url(), // no default — a mailed link needs a real origin
+  AGENTGATE_EMAIL_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(5),
+
 
   // ═══════════════════════════════════════════════════════
   // Week 3 — Rate limiting & CORS
@@ -35,11 +38,6 @@ const envSchema = z.object({
   AGENTGATE_AUDIT_DB_POOL_MAX: z.coerce.number().int().positive().default(5),
   AGENTGATE_AUDIT_PREVIEW_MAX_BYTES: z.coerce.number().default(8192),
 
-
-  // ═══════════════════════════════════════════════════════
-  // Week 3 — BullMQ
-  // ═══════════════════════════════════════════════════════
-  // AGENTGATE_BULLMQ_PREFIX: z.string().default("agentgate"),
 
   // ═══════════════════════════════════════════════════════
   // Week 5 — Audit compliance
@@ -78,7 +76,22 @@ const envSchema = z.object({
     - default : if var is missing in env , use the default value provided in the schema
   3. The result of `.parse()` is a plain JavaScript object that is fully typed. When you import env in server.ts, you aren't talking to the .env file anymore; you are talking to a validated, typed object in memory.
 **/
-export const env = envSchema.parse(process.env);
+export const env = envSchema.superRefine((val  , ctx)=>{
+  if(val.AGENTGATE_EMAIL_PROVIDER === "sendgrid" && !val.AGENTGATE_SENDGRID_API_KEY){
+    ctx.addIssue({
+      code : z.ZodIssueCode.custom,
+      path : ["AGENTGATE_SENDGRID_API_KEY"],
+      message : "AGENTGATE_SENDGRID_API_KEY is required when AGENTGATE_EMAIL_PROVIDER is set to sendgrid"
+    })
+  }
+  if (val.AGENTGATE_NODE_ENV === "production" && val.AGENTGATE_EMAIL_PROVIDER === "console") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path : ["AGENTGATE_EMAIL_PROVIDER"],
+      message: "AGENTGATE_EMAIL_PROVIDER cannot be set to console in production",
+    });
+  }
+}).parse(process.env);
 
 function parseHexEnv(value: string, name: string) {
   if (!/^[0-9a-fA-F]+$/.test(value)) {
