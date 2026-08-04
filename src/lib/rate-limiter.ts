@@ -138,3 +138,16 @@ export function getRateLimiterHealth(): {
   const state = rateLimiterCircuitBreaker.getState();
   return { healthy: state !== "OPEN", breakerState: state };
 }
+
+
+/*
+  This is NOT a security weakening and NOT a test - mode bypass of the
+  throttle: production's real per-IP ceiling is completely untouched
+  this only ever runs from test code, on the one call site best
+  positioned to clear its own specific path before consuming it.
+*/
+
+export async function resetRateLimitKeyForTest(namespace: string, identifier: string): Promise<void> {
+  const key = buildNamespacedRateLimitKey(namespace, identifier);
+  await rateLimiterRedis.del(key);
+}

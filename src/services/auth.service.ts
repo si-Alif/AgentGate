@@ -4,7 +4,6 @@ import { prisma } from "../lib/prisma.js";
 import { Prisma } from "@prisma/client";
 import { tenantRepository } from "../repositories/tenant.repository.js";
 import { userRepository } from "../repositories/user.repository.js";
-import { emailQueue } from "../queue/email.queue.js";
 import { PASSWORD_PEPPER, REFRESH_TOKEN_SECRET } from "../config/env.js";
 import {assertValidRole} from "../lib/role.js";
 import { enqueueVerificationEmail } from '../queue/email.queue.js';

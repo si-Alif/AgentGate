@@ -1,5 +1,6 @@
-import type { FastifyInstance } from 'fastify'
-import { authService } from '../../services/auth.service.js'
+import type { FastifyInstance } from 'fastify';
+import { authService } from '../../services/auth.service.js';
+import { createPublicAuthThrottleHook } from "../../lib/public-auth-throttle.js";
 
 interface RegisterTenantInput {
   tenantName: string
@@ -13,6 +14,7 @@ export async function registerRoutes(app: FastifyInstance) {
   app.post(
     '/register-tenant',
     {
+      onRequest: [createPublicAuthThrottleHook("register-tenant")],
       schema: {
         body: {
           type: 'object',
@@ -73,6 +75,39 @@ export async function registerRoutes(app: FastifyInstance) {
     }
   )
 
+  app.post(
+    '/register-user',
+    {
+      onRequest: [createPublicAuthThrottleHook("register-user")],
+      schema: {
+        body: {
+          type: 'object',
+          required: ['email', 'password'],
+          properties: {
+            email: { type: 'string', format: 'email' },
+            password: { type: 'string', minLength: 8 },
+          },
+          additionalProperties: false,
+        },
+        response: {
+          201: {
+            type: 'object',
+            properties: {
+              user: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  email: { type: 'string' },
+                  role: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {}
+  )
   // GET /auth/verify-email
   app.get(
     '/verify-email',
