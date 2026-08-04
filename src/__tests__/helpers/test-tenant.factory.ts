@@ -4,23 +4,10 @@ import { prisma } from "../../lib/prisma.js";
 import { agentService } from "../../services/agent.service.js";
 import { toolService } from "../../services/tool.service.js";
 import { encryptConfig } from "../../lib/encryption.js";
+import { resetRateLimitKeyForTest } from "../../lib/rate-limiter.js";
 
-/**
- * Week 8 Day 1 — Decision 8.18 / Finding F2.
- *
- * THE single, authoritative shape for this factory, confirmed against
- * every Week 6/7 daily document's own usage (the freshest, most-used
- * convention in this project's history) — app.inject-based,
- * {tenantId, userId, accessToken}. Earlier weeks' documents (1-5)
- * sometimes show an older, Prisma-direct-insert style with no `app`
- * parameter, returning {id, ownerUserId}. Day 1 is the first day this
- * project imports and uses this factory across flows spanning that
- * entire range at once — the first day the drift becomes load-bearing
- * rather than cosmetic. If the real, on-disk file already matches this
- * shape, this patch is a no-op; confirm by direct read before treating
- * either possibility as certain, per this project's own "verify before
- * building on it" discipline.
- */
+
+const TEST_REQUEST_IP = "127.0.0.1";
 
 export interface TestTenantContext {
   tenantId: string;
@@ -29,6 +16,10 @@ export interface TestTenantContext {
 }
 
 export async function createTestTenant(app: FastifyInstance): Promise<TestTenantContext> {
+
+  await resetRateLimitKeyForTest("public-auth", `${TEST_REQUEST_IP}:register-tenant`);
+  await resetRateLimitKeyForTest("public-auth", `${TEST_REQUEST_IP}:login`);
+
   const suffix = crypto.randomUUID();
   const email = `owner-${suffix}@example.com`;
   const password = "TestPassword123!";
