@@ -7,7 +7,11 @@ import { redis } from "../../lib/redis.js";
 // is the final safety net so the process exits cleanly, and so
 // leaked Redis connections don't hang the test runner (a real risk
 // once BullMQ workers + pub/sub subscribers exist in Week 5/7).
+// src/__tests__/helpers/setup.ts
 afterAll(async () => {
   await prisma.$disconnect();
-  await redis.quit();
+
+  if (redis.status !== "end" && redis.status !== "close") {
+    await redis.quit();
+  }
 });
