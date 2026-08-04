@@ -55,7 +55,7 @@ deadLetterEmailQueue.on("error", logQueueError(DEAD_LETTER_EMAIL_QUEUE_NAME));
  * still works.
  */
 export function verificationEmailJobId(userId: string): string {
-  return `verification:${userId}`;
+  return `verification-${userId}`;
 }
 
 /**
