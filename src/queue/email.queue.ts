@@ -2,7 +2,7 @@ import { Queue } from "bullmq";
 import { redis } from "../lib/redis.js";
 
 export const EMAIL_QUEUE_NAME = "email";
-export const DEAD_LETTER_EMAIL_QUEUE_NAME = "dead-letter:email";
+export const DEAD_LETTER_EMAIL_QUEUE_NAME = "dead-letter-email";
 
 export type EmailJobType = "verification";
 
