@@ -8,7 +8,9 @@ import { withTimeout } from "../lib/timeout.js";
 import { TimeoutError } from "../handlers/types.js";
 
 
-export const tenantEventSubscriber = redis.duplicate();
+export const tenantEventSubscriber = redis.duplicate({
+  connectionName: "agentgate:tenant-event-subscriber",
+});
 
 tenantEventSubscriber.on("error", (err: Error) => {
   console.error("[ws-tenant-registry] subscriber connection error:", err.message);

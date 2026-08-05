@@ -17,6 +17,7 @@ export const rateLimiterRedis = new Redis(
   env.AGENTGATE_REDIS_URL , {
     maxRetriesPerRequest: 1,
     commandTimeout: 1000,
+    connectionName: "agentgate:rate-limiter",
 
     retryStrategy : (times : number) => {
       return Math.min(times * 200, 2000);

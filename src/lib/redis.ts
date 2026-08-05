@@ -12,6 +12,7 @@ export const redis =
     // Required by BullMQ Workers — without this, ioredis throws when a
     // blocking command (used internally for job processing) can't connect.
     maxRetriesPerRequest: null,
+    connectionName: "agentgate:main",
     // Reconnect with backoff instead of crashing the process on a blip.
     retryStrategy: (times) => Math.min(times * 200, 5000),
     reconnectOnError: () => true,
