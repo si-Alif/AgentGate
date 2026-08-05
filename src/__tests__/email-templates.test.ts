@@ -13,3 +13,4 @@ describe("renderVerificationEmail", () => {
     expect(rendered.html).toContain("token=unique-token-xyz");
   });
 });
+

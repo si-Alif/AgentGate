@@ -25,7 +25,7 @@ export async function invitationRoutes(app: FastifyInstance) {
           additionalProperties: false,
         },
         response: {
-          scehma: {
+          201: {
             type: "object",
             properties: {
               id: { type: "string" },
@@ -39,6 +39,25 @@ export async function invitationRoutes(app: FastifyInstance) {
               // passwordHash out of every auth response since Day 3.
             },
           },
+          429: {
+            type: "object",
+            properties: {
+              statusCode: { type: "number" },
+              error: { type: "string" },
+              message: { type: "string" },
+            },
+            required: ["statusCode", "error", "message"],
+          },
+          // Define 503 so the TS compiler allows reply.status(503).send(...)
+          503: {
+            type: "object",
+            properties: {
+              statusCode: { type: "number" },
+              error: { type: "string" },
+              message: { type: "string" },
+            },
+            required: ["statusCode", "error", "message"],
+          }
         },
       },
     },
