@@ -4,7 +4,7 @@ import { env } from "../config/env.js";
 
 const PUBLIC_AUTH_RATE_NAMESPACE = "public-auth";
 
-export type PublicAuthRoute = "register-tenant" | "register-user" | "login";
+export type PublicAuthRoute = "register-tenant" | "accept-invitation" | "login";
 
 //
 export function createPublicAuthThrottleHook(routeName: PublicAuthRoute) {
