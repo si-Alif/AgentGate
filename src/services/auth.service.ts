@@ -5,7 +5,7 @@ import { Prisma } from "@prisma/client";
 import { tenantRepository } from "../repositories/tenant.repository.js";
 import { userRepository } from "../repositories/user.repository.js";
 import { PASSWORD_PEPPER, REFRESH_TOKEN_SECRET } from "../config/env.js";
-import {assertValidRole} from "../lib/role.js";
+import { assertValidRole } from "../lib/role.js";
 import { enqueueVerificationEmail } from '../queue/email.queue.js';
 
 import type { FastifyInstance } from "fastify";
@@ -22,12 +22,70 @@ async function getDummyPasswordHash() {
   return dummyPasswordHashPromise;
 }
 
+/**
+ * The ONE place a refresh token is ever hashed, anywhere in this
+ * file. Deliberately HMAC-SHA256, never Argon2:
+ *
+ * - A refresh token is a 256-bit, machine-generated random value
+ *   (crypto.randomBytes(32)) — not a low-entropy, human-chosen
+ *   secret like a password. There's no dictionary to brute-force,
+ *   so Argon2's deliberate slowness defends against a threat that
+ *   doesn't exist here.
+ * - More importantly: refresh has to look this token up by VALUE
+ *   (it's the only identifier the server receives) via
+ *   `findByRefreshTokenHash(hash)`. That requires a DETERMINISTIC
+ *   hash — same input always produces the same output. Argon2
+ *   salts randomly per call and can only be used with
+ *   argon2.verify(knownHash, token) once you already know which
+ *   hash to check — it structurally cannot serve a lookup-by-value
+ *   query. HMAC-SHA256, keyed by a server-only secret, gives the
+ *   same one-way, can't-invert-without-the-key property while
+ *   staying deterministic.
+ *
+ * Every caller in this file (issueSessionTokens, login, refresh,
+ * logout) MUST go through this one function — using a different
+ * hash construction in even one of them silently breaks refresh
+ * for whichever path used it (this fixes exactly that bug in
+ * issueSessionTokens, which previously used argon2.hash() while
+ * refresh()/logout() looked up via this HMAC).
+ */
+function hashRefreshToken(rawRefreshToken: string): string {
+  return crypto
+    .createHmac("sha256", REFRESH_TOKEN_SECRET)
+    .update(rawRefreshToken)
+    .digest("hex");
+}
+
 export const authService = {
+  async issueSessionTokens(
+    user: { id: string; tenantId: string; role: string },
+    app: FastifyInstance
+  ) {
+    const accessToken = await app.jwt.sign(
+      {
+        tenantId: user.tenantId,
+        userId: user.id,
+        role: assertValidRole(user.role),
+      },
+      { expiresIn: "15m" }
+    );
+
+    const rawRefreshToken = crypto.randomBytes(32).toString("base64url");
+    const refreshTokenHash = hashRefreshToken(rawRefreshToken);
+    await userRepository.updateRefreshTokenHash(user.id, user.tenantId, refreshTokenHash);
+
+    return {
+      accessToken,
+      refreshToken: rawRefreshToken,
+      expiresIn: 900, // 15 minutes in seconds
+    };
+  },
+
   async registerTenant(data: {
-    tenantName: string
-    slug: string
-    ownerEmail: string
-    password: string
+    tenantName: string;
+    slug: string;
+    ownerEmail: string;
+    password: string;
   }) {
     const existingTenant = await tenantRepository.findBySlug(data.slug);
     if (existingTenant) throw new Error("SLUG_TAKEN");
@@ -108,12 +166,9 @@ export const authService = {
     // Refresh token strategy (schema-compatible):
     // Store only a deterministic keyed hash (never plaintext), so we can look up the user.
     const rawRefreshToken = crypto.randomBytes(32).toString("base64url");
-    const refreshTokenHash = crypto
-      .createHmac("sha256", REFRESH_TOKEN_SECRET)
-      .update(rawRefreshToken)
-      .digest("hex");
+    const refreshTokenHash = hashRefreshToken(rawRefreshToken);
 
-    await userRepository.updateRefreshTokenHash(user.id , user.tenantId, refreshTokenHash);
+    await userRepository.updateRefreshTokenHash(user.id, user.tenantId, refreshTokenHash);
 
     return {
       accessToken,
@@ -125,10 +180,7 @@ export const authService = {
   async refresh(params: { refreshToken: string; app: FastifyInstance }) {
     const { refreshToken, app } = params;
 
-    const refreshTokenHash = crypto
-      .createHmac("sha256", REFRESH_TOKEN_SECRET)
-      .update(refreshToken)
-      .digest("hex");
+    const refreshTokenHash = hashRefreshToken(refreshToken);
 
     const user = await userRepository.findByRefreshTokenHash(refreshTokenHash);
     if (!user || !user.isVerified) throw new Error("INVALID_REFRESH_TOKEN");
@@ -148,15 +200,12 @@ export const authService = {
   async logout(params: { refreshToken: string }) {
     const { refreshToken } = params;
 
-    const refreshTokenHash = crypto
-      .createHmac("sha256", REFRESH_TOKEN_SECRET)
-      .update(refreshToken)
-      .digest("hex");
+    const refreshTokenHash = hashRefreshToken(refreshToken);
 
     const user = await userRepository.findByRefreshTokenHash(refreshTokenHash);
     if (!user) throw new Error("INVALID_REFRESH_TOKEN");
 
-    await userRepository.updateRefreshTokenHash(user.id, user.tenantId ,null);
+    await userRepository.updateRefreshTokenHash(user.id, user.tenantId, null);
     return { loggedOut: true };
   },
 };
