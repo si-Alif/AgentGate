@@ -6,6 +6,7 @@ import { generateInvitationToken, hashInvitationToken } from "../lib/invitation-
 import { enqueueInvitationEmail } from "../queue/email.queue.js";
 import { env } from "../config/env.js";
 import type { Role } from "../lib/roles.js";
+import { PASSWORD_PEPPER } from "../config/env.js";
 
 export class EmailAlreadyRegisteredError extends Error {
   constructor() {
@@ -99,7 +100,7 @@ export const invitationService = {
     const existingUser = await userRepository.findByEmail(invitation.email);
     if (existingUser) return { ok: false, reason: "email_taken" };
 
-    const passwordHash = await argon2.hash(password);
+    const passwordHash = await argon2.hash(password, { secret: PASSWORD_PEPPER });
 
     // verify the user accepted the invitation and create the user in a transaction to avoid race conditions . Still , if there is a race condition regarding accepting the invitation , we will catch it and return the appropriate error message
     try {

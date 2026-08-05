@@ -85,7 +85,7 @@ export async function registerRoutes(app: FastifyInstance) {
           type: 'object',
           required: ['token', 'password'],
           properties: {
-            email: { type: 'string', minLength: 1 },
+            token: { type: 'string', minLength: 1 },
             password: { type: 'string', minLength: 8 },
           },
           additionalProperties: false,
