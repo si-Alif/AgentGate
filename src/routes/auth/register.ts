@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { authService } from '../../services/auth.service.js';
 import { createPublicAuthThrottleHook } from "../../lib/public-auth-throttle.js";
+import { invitationService } from "../../services/invitation.service.js";
 
 interface RegisterTenantInput {
   tenantName: string
@@ -76,37 +77,44 @@ export async function registerRoutes(app: FastifyInstance) {
   )
 
   app.post(
-    '/register-user',
+    '/accept-invitation',
     {
-      onRequest: [createPublicAuthThrottleHook("register-user")],
+      onRequest: [createPublicAuthThrottleHook("accept-invitation")],
       schema: {
         body: {
           type: 'object',
-          required: ['email', 'password'],
+          required: ['token', 'password'],
           properties: {
-            email: { type: 'string', format: 'email' },
+            email: { type: 'string', minLength: 1 },
             password: { type: 'string', minLength: 8 },
           },
           additionalProperties: false,
         },
-        response: {
-          201: {
-            type: 'object',
-            properties: {
-              user: {
-                type: 'object',
-                properties: {
-                  id: { type: 'string' },
-                  email: { type: 'string' },
-                  role: { type: 'string' },
-                },
-              },
-            },
-          },
-        },
       },
     },
-    async (request, reply) => {}
+    async (request, reply) => {
+      const { token, password } = request.body as { token: string; password: string };
+      const result = await invitationService.acceptInvitation(token, password);
+
+      if (!result.ok) {
+        if (result.reason === "email_taken") {
+          return reply.conflict("An account with this email already exists. Try logging in instead.");
+        }
+
+        // not_found / revoked / already_accepted / expired /
+        // tenant_suspended all collapse to ONE generic message —
+        // never a distinct oracle for which specific token-state
+        // failure occurred. Note this holds regardless of whether a
+        // stray `role` field in the request body was stripped or
+        // rejected by the schema above — acceptInvitation()'s own
+        // signature (rawToken, password) never reads one either way.
+        return reply.badRequest("This invitation is no longer valid.");
+      }
+
+      const tokens = await authService.issueSessionTokens(result.user , app);
+      return reply.status(200).send(tokens);
+
+    }
   )
   // GET /auth/verify-email
   app.get(

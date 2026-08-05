@@ -18,6 +18,7 @@ import { permissionRoutes } from "./routes/permissions.js";
 import { auditEventRoutes } from "./routes/audit-events.js";
 import { mcpGatewayRoutes } from "./routes/mcp.js";
 import { observabilityRoutes , observabilityStreamRoutes } from "./routes/observability.js";
+import { invitationRoutes } from "./routes/invitations.js";
 
 import { authenticate } from "./hooks/authenticate.hook.js";
 import { attachTenantContext } from "./hooks/attach-tenant-context.hook.js";
@@ -188,6 +189,7 @@ export async function createApp(): Promise<FastifyInstance> {
       }
     );
 
+    await scope.register(invitationRoutes, { prefix: "/api/users" });
     await scope.register(agentRoutes, { prefix: "/api/agents" });
     await scope.register(toolRoutes, { prefix: "/api/tools" });
     await scope.register(permissionRoutes, { prefix: "/api/agents" });
