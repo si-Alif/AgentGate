@@ -19,6 +19,12 @@ const envSchema = z.object({
   AGENTGATE_NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
 
+  // ── User invitations (register-user ) ──────────────────
+  AGENTGATE_INVITATION_TOKEN_SECRET: z.string().min(32),
+  AGENTGATE_INVITATION_TTL_DAYS: z.coerce.number().int().positive().default(7),
+  AGENTGATE_INVITATION_ISSUE_RATE_LIMIT: z.coerce.number().int().positive().default(20), // per minute, per (tenantId, userId)
+
+
   // ── Email delivery (closes Finding W8-1) ──────────────────────────
   AGENTGATE_EMAIL_PROVIDER: z.enum(["console", "sendgrid"]).default("console"),
   AGENTGATE_SENDGRID_API_KEY: z.string().min(1).optional(),
