@@ -12,6 +12,7 @@
     "start": "node dist/server.js",
     "test": "vitest",
     "test:watch": "vitest --watch",
+    "test:load": "vitest run src/__tests__/load --pool=forks --poolOptions.forks.singleFork=true",
     "lint": "tsc --noEmit"
   },
   "keywords": [

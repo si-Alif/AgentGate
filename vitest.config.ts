@@ -9,6 +9,7 @@ export default defineConfig({
     // shared-singleton race entirely without sharding infrastructure.
     fileParallelism: false,
     setupFiles: ["./src/__tests__/helpers/setup.ts"],
+    exclude: ["**/node_modules/**", "**/dist/**", "src/__tests__/load/**"],
     hookTimeout: 15_000,
   },
 });
