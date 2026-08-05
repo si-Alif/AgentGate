@@ -46,3 +46,48 @@ export function renderVerificationEmail(params: { token: string }): RenderedEmai
 
   return { subject, html, text };
 }
+
+export function renderInvitationEmail(params: { token: string }): RenderedEmail {
+  const acceptApiUrl = new URL("/auth/accept-invitation", env.AGENTGATE_APP_BASE_URL).toString();
+  const referenceLink = new URL("/accept-invitation", env.AGENTGATE_APP_BASE_URL);
+  referenceLink.searchParams.set("token", params.token);
+
+  const subject = "You've been invited to join a team on AgentGate";
+
+  // AgentGate's MVP is API-first (PRD §7 explicitly excludes a
+  // dashboard UI) — a "click this link" call to action would 404
+  // today. The primary content is a copyable token + a working curl
+  // example instead. The reference link is included for forward
+  // compatibility only, once a real dashboard exists to receive it.
+  const text = [
+    "You've been invited to join a team on AgentGate.",
+    "",
+    "There's no web page to click through yet — use the token below",
+    "directly with the accept-invitation endpoint to set your password",
+    "and get an access token in one step:",
+    "",
+    `  curl -X POST ${acceptApiUrl} \\`,
+    `    -H "Content-Type: application/json" \\`,
+    `    -d '{"token": "${params.token}", "password": "<choose-a-password>"}'`,
+    "",
+    `(Reference link, for a future dashboard: ${referenceLink.toString()})`,
+    "",
+    "This invitation expires soon. If you weren't expecting this, you can ignore this email.",
+  ].join("\n");
+
+  const html = `
+    <div style="font-family: -apple-system, sans-serif; max-width: 520px; margin: 0 auto;">
+      <h2>You've been invited to join a team on AgentGate</h2>
+      <p>There's no web page to click through yet — use the token below
+         directly with the <code>accept-invitation</code> endpoint to set
+         your password and get an access token in one step:</p>
+      <pre style="background:#f5f5f5;padding:12px;border-radius:6px;overflow-x:auto;font-size:13px;">curl -X POST ${acceptApiUrl} \\
+  -H "Content-Type: application/json" \\
+  -d '{"token": "${params.token}", "password": "&lt;choose-a-password&gt;"}'</pre>
+      <p style="color:#666;font-size:13px;">Reference link (for a future dashboard): ${referenceLink.toString()}</p>
+      <p style="color:#999;font-size:12px;">This invitation expires soon. If you weren't expecting this, you can ignore this email.</p>
+    </div>
+  `.trim();
+
+  return { subject, html, text };
+}

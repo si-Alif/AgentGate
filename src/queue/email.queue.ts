@@ -4,13 +4,23 @@ import { redis } from "../lib/redis.js";
 export const EMAIL_QUEUE_NAME = "email";
 export const DEAD_LETTER_EMAIL_QUEUE_NAME = "dead-letter-email";
 
-export type EmailJobType = "verification";
+export type EmailJobType = "verification" | "invitation";
 
-export interface EmailQueueJob {
-  type: EmailJobType;
+
+export interface VerificationEmailQueue {
+  type: "verification";
   email: string;
   token: string;
 }
+
+export interface InvitationEmailQueue{
+  type : "invitation";
+  email: string;
+  token: string;
+  tenantId: string;
+}
+
+export type EmailQueueJob = VerificationEmailQueue | InvitationEmailQueue;
 
 export type EmailDeadLetterReasonCode =
   | "PERMANENT_PROVIDER_ERROR" | "TRANSIENT_FAILURE_EXHAUSTED" | "UNKNOWN_JOB_TYPE";
@@ -64,8 +74,20 @@ export function verificationEmailJobId(userId: string): string {
  * never awaited on the hot path, never throws.
  */
 export function enqueueVerificationEmail(params: { userId: string; email: string; token: string }): void {
-  const payload: EmailQueueJob = { type: "verification", email: params.email, token: params.token };
+  const payload: VerificationEmailQueue = { type: "verification", email: params.email, token: params.token };
   emailQueue.add("verification", payload, { jobId: verificationEmailJobId(params.userId) }).catch((err) => {
     console.warn(`[email] failed to enqueue verification email for user ${params.userId}:`, err);
+  });
+}
+
+export function enqueueInvitationEmail(params: { email: string; rawToken: string; tenantId: string }): void {
+  const payload: InvitationEmailQueue = {
+    type: "invitation",
+    email: params.email,
+    token: params.rawToken,
+    tenantId: params.tenantId,
+  };
+  emailQueue.add("invitation", payload).catch((err) => {
+    console.warn(`[email] failed to enqueue invitation email for ${params.email}:`, err);
   });
 }

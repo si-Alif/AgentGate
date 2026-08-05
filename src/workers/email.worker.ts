@@ -8,6 +8,7 @@ import { getEmailProvider } from "../lib/email/email-provider.factory.js";
 import { PermanentEmailError, TransientEmailError } from "../lib/email/email-provider.js";
 import { renderVerificationEmail } from "../lib/email/email-templates.js";
 import { registerEmailWorkerForHealth } from "../lib/email/email-health.js";
+import { renderInvitationEmail } from "../lib/email/email-templates.js";
 
 const EMAIL_BACKOFF_MS = [1_000, 5_000, 30_000] as const; // matches audit.worker.ts (Week 5)
 
@@ -35,16 +36,25 @@ async function writeDeadLetter(
 async function processJob(job: Job<EmailQueueJob>): Promise<void> {
   const provider = getEmailProvider();
 
-  // Defensive runtime check, not a TS-reachable branch today — job
-  // data crosses a Redis/JSON boundary and doesn't inherit compile-
-  // time guarantees . A future second job type, or a stale/
-  // legacy payload, lands here rather than crashing the worker.
-  if ((job.data.type as string) !== "verification") {
-    await writeDeadLetter("UNKNOWN_JOB_TYPE", `Unrecognized email job type: ${job.data.type}`, job.id ?? "unknown", job.data);
-    return;
-  }
+  let rendered: ReturnType<typeof renderVerificationEmail>;
 
-  const rendered = renderVerificationEmail({ token: job.data.token });
+  switch (job.data.type) {
+    case "verification":
+      rendered = renderVerificationEmail({ token: job.data.token });
+      break;
+    case "invitation":
+      rendered = renderInvitationEmail({ token: job.data.token });
+      break;
+    default:
+      const exhaustive : never = job.data;
+      await writeDeadLetter(
+        "UNKNOWN_JOB_TYPE",
+        `Unrecognized email job type: ${JSON.stringify(exhaustive)}`,
+        job.id ?? "unknown",
+        job.data
+      );
+      return;
+  }
 
   try {
     await provider.send({ to: job.data.email, subject: rendered.subject, html: rendered.html, text: rendered.text });
@@ -91,3 +101,4 @@ export function createEmailWorker(): Worker<EmailQueueJob> {
   registerEmailWorkerForHealth(worker);
   return worker;
 }
+
