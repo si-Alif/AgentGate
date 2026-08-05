@@ -29,13 +29,15 @@ export const userRepository = {
       where: { verificationToken: token, deletedAt: null, tenant: { deletedAt: null } },
     }),
 
+  // as user creation is now available via invitation acceptance , verificationToken and isVerified are made optional as invitationTable will be used to verify the verificationToken and once done isVerified will also be passed along with it
   create: (
     data: {
       tenantId: string;
       email: string;
       passwordHash: string;
       role: string;
-      verificationToken: string;
+      verificationToken?: string;
+      isVerified?: boolean;
     },
     client: DbClient = prisma
   ) => client.user.create({ data }),
