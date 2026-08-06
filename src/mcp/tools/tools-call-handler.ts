@@ -51,7 +51,12 @@ export async function handleToolsCall(
     throw McpGatewayError.fromSignal("INVALID_REQUEST", { reason: "mcp_name_header_body_mismatch" });
   }
 
-  const tool = await toolRepository.findByName(name, identity.tenantId);
+  let tool: Awaited<ReturnType<typeof toolRepository.findByName>>;
+  try {
+    tool = await toolRepository.findByName(name, identity.tenantId);
+  }catch (err : unknown ){
+    throw McpGatewayError.fromSignal("SERVICE_DEGRADED", { reason: "tool_name_resolution_failed" });
+  }
   if (!tool) {
     throw McpGatewayError.fromSignal("TOOL_NOT_FOUND", { name });
   }

@@ -94,7 +94,15 @@ export async function executeTool(
   };
 
   try {
-    const tool = await toolRepository.findById(toolId, tenantId);
+    let tool: Awaited<ReturnType<typeof toolRepository.findById>>;
+
+    try {
+      tool = await toolRepository.findById(toolId, tenantId);
+    }catch (err : unknown ){
+      const message = err instanceof Error ? err.message : String(err);
+      return finish({ status: "error", error: `Tool lookup failed: ${message}` }, "INFRA_UNAVAILABLE");
+    }
+
     if (!tool) {
       // Scoped lookup returning null covers BOTH "doesn't exist" and
       // "belongs to a different tenant" — same convention Week 2's

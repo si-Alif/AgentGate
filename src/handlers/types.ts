@@ -15,7 +15,8 @@ export type ToolExecutionErrorCode =
   | "TIMEOUT"
   | "PAYLOAD_TOO_LARGE"
   | "UNSUPPORTED_MEDIA_TYPE"
-  | "HANDLER_ERROR";
+  | "HANDLER_ERROR"
+  | "INFRA_UNAVAILABLE";
 
 
 export interface HandlerResult {

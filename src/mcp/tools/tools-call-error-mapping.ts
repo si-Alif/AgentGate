@@ -47,8 +47,10 @@ export function mapToolExecutionErrorToError(
       // deactivated") and mapPermissionDenialToError's "tool_inactive"
       // case above — consistent across both mapping tables.
       return McpGatewayError.fromSignal("TOOL_NOT_FOUND", data);
+    case "INFRA_UNAVAILABLE":
+      return McpGatewayError.fromSignal("SERVICE_DEGRADED", data);
     case "SSRF_BLOCKED":
-      return McpGatewayError.fromSignal("SSRF_BLOCKED", data);
+    return McpGatewayError.fromSignal("SSRF_BLOCKED", data);
     case "DECRYPTION_FAILED":
     case "INVALID_HANDLER_CONFIG":
     case "HANDLER_ERROR":
