@@ -15,6 +15,7 @@ import {
 import { createApp } from "../app.js";
 import type { FastifyInstance } from "fastify";
 import { DEFAULT_TIMEOUT_MS } from "../handlers/types.js";
+import { toolRepository } from "../repositories/tool.repository.js";
 
 const mockedExecuteTool = vi.mocked(executeTool);
 
@@ -288,6 +289,23 @@ describe("handleToolsCall — pipeline ordering & short-circuiting", () => {
 
       expect(rlSpy).toHaveBeenCalledWith(agent.id, expect.any(Number), tenant.tenantId);
       rlSpy.mockRestore();
+      await cleanupTenant(tenant.tenantId);
+    });
+  });
+  describe("handleToolsCall — tool-name-resolution infra fault (Week 8 Day 4, Decision 8.82)", () => {
+    it("GATE — a raw DB fault during toolRepository.findByName maps to -32002, never the generic -32603 fallback", async () => {
+      const tenant = await createTestTenant(app);
+      const { agent } = await createTestAgent(tenant.tenantId, tenant.userId);
+      const spy = vi.spyOn(toolRepository, "findByName").mockRejectedValue(new Error("ECONNRESET"));
+
+      const err = await handleToolsCall(
+        { agentId: agent.id, tenantId: tenant.tenantId }, { name: "whatever" }, performance.now(), new AbortController().signal
+      ).catch((e) => e);
+
+      expect(err.code).toBe(-32002);
+      expect(err.code).not.toBe(-32603);
+
+      spy.mockRestore();
       await cleanupTenant(tenant.tenantId);
     });
   });

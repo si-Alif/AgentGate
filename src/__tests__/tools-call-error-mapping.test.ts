@@ -47,7 +47,7 @@ describe("mapPermissionDenialToError — exhaustive, all six reasons", () => {
 describe("mapToolExecutionErrorToError — exhaustive, all nine codes", () => {
   const ALL_CODES: ToolExecutionErrorCode[] = [
     "TOOL_NOT_FOUND", "TOOL_INACTIVE", "DECRYPTION_FAILED", "INVALID_HANDLER_CONFIG",
-    "SSRF_BLOCKED", "TIMEOUT", "PAYLOAD_TOO_LARGE", "UNSUPPORTED_MEDIA_TYPE", "HANDLER_ERROR",
+    "SSRF_BLOCKED", "TIMEOUT", "PAYLOAD_TOO_LARGE", "UNSUPPORTED_MEDIA_TYPE", "HANDLER_ERROR", "INFRA_UNAVAILABLE",
   ];
 
   it("TOOL_NOT_FOUND and TOOL_INACTIVE share -32003, by design", () => {
@@ -77,5 +77,11 @@ describe("mapToolExecutionErrorToError — exhaustive, all nine codes", () => {
   it("detail (already-redacted ExecutionResult.error) is safely passed through as data.detail", () => {
     const mapped = mapToolExecutionErrorToError("HANDLER_ERROR", "ECONNREFUSED at target");
     expect((mapped.data as any).detail).toBe("ECONNREFUSED at target");
+  });
+});
+
+describe("mapToolExecutionErrorToError — INFRA_UNAVAILABLE (Week 8 Day 4, Decision 8.81)", () => {
+  it("maps to -32002 SERVICE_DEGRADED, never -32004 TOOL_EXECUTION_ERROR", () => {
+    expect(mapToolExecutionErrorToError("INFRA_UNAVAILABLE").code).toBe(-32002);
   });
 });
