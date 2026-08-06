@@ -100,11 +100,18 @@ export async function stopFullSystem(harness: SystemHarness): Promise<void> {
   }
   await auditQueue.close();
   await deadLetterAuditQueue.close();
-  await auditPrisma.$disconnect();
-
+  try {
+    await auditPrisma.$disconnect();
+  }catch(err){
+    console.warn("[system-harness] auditPrisma.$disconnect() failed:", err);
+  }
   // 10-13. Shared infrastructure
   safeDisconnectRedis(rateLimiterRedis);
   safeDisconnectRedis(redis);
-  await prisma.$disconnect();
+  try {
+    await prisma.$disconnect();
+  }catch(err){
+    console.warn("[system-harness] prisma.$disconnect() failed:", err);
+  }
   await closeSafeAgent();
 }
