@@ -1,5 +1,5 @@
-import { auditQueue } from "../../../queue/audit.queue.js";
-import type { SystemHarness } from "../../helpers/system-harness.js";
+import { auditQueue } from "../../queue/audit.queue.js";
+import type { SystemHarness } from "./system-harness.js";
 
 const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 250;
