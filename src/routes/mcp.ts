@@ -130,9 +130,10 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
 
     const identity = await resolveAgentIdentity(request.headers.authorization);
     if (!identity.ok) {
+      const signal = identity.reason === "infra_unavailable" ? "SERVICE_DEGRADED" : "IDENTITY_INVALID";
       return reply
         .status(200)
-        .send(formatMcpErrorResponse(McpGatewayError.fromSignal("IDENTITY_INVALID"), requestId));
+        .send(formatMcpErrorResponse(McpGatewayError.fromSignal(signal), requestId));
     }
 
     const method = versionResult.data.method;

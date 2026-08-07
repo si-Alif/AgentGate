@@ -12,7 +12,7 @@ export type IdentityResolutionResult =
   | { ok: true; identity: ResolvedIdentity; source: "cache" | "database" }
   | {
     ok: false;
-    reason: "malformed_credential" | "not_found" | "agent_inactive" | "tenant_suspended";
+    reason: "malformed_credential" | "not_found" | "agent_inactive" | "tenant_suspended" | "infra_unavailable";
   };
 
 function isGranted(cached: Pick<CachedIdentity, "agentActive" | "tenantActive">): boolean {
@@ -55,7 +55,14 @@ export async function resolveAgentIdentity(
   }
 
   // Cache miss — full verification path (Postgres + Argon2).
-  const row = await agentRepository.findByKeyIdWithTenantContext(parsed.keyId);
+  let row: Awaited<ReturnType<typeof agentRepository.findByKeyIdWithTenantContext>>;
+  try {
+    row = await agentRepository.findByKeyIdWithTenantContext(parsed.keyId);
+  }catch(err){
+    console.error("[mcp-auth-resolver] identity lookup failed (infra fault):", err);
+    return { ok: false, reason: "infra_unavailable" };
+  }
+
   if (!row) {
     return { ok: false, reason: "not_found" };
   }
