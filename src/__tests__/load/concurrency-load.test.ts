@@ -24,7 +24,7 @@ import {
 } from "../../observability/ws-connection-tracker.js";
 import { getAllRegisteredSockets, resetTenantRegistryForTest } from "../../observability/ws-tenant-registry.js";
 import { env } from "../../config/env.js";
-import { drainAuditQueueAndCloseWorker, waitForCondition } from "./helpers/audit-drain.js";
+import { drainAuditQueueAndCloseWorker, waitForCondition } from "../helpers/audit-drain.js";
 
 const OVERAGE_CALLS_PER_AGENT = 5;
 const GLOBAL_CONCURRENCY = 150;
