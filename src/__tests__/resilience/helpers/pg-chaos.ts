@@ -1,20 +1,17 @@
 import { prisma } from "../../../lib/prisma.js";
 
 
-
 export async function killOneMainPoolBackend(): Promise<{ killed: boolean; pid: number | null }> {
-  const rows = await prisma.$queryRaw<Array<{ pid: number }>>`
-    SELECT pid FROM pg_stat_activity
-    WHERE application_name = 'agentgate-main'
-      AND pid <> pg_backend_pid()
-      AND state = 'active'
-    LIMIT 1
+  const rows = await prisma.$queryRaw<Array<{ pid: number; pg_terminate_backend: boolean }>>`
+    SELECT pid, pg_terminate_backend(pid)
+      FROM pg_stat_activity
+      WHERE application_name = 'agentgate-main'
+        AND pid <> pg_backend_pid()
+        AND state = 'active'
+      LIMIT 1
   `;
   const target = rows[0];
-  if (!target) return { killed: false, pid: null };
-
-  await prisma.$queryRaw`SELECT pg_terminate_backend(${target.pid})`;
-  return { killed: true, pid: target.pid };
+  return target ? { killed: true, pid: target.pid } : { killed: false, pid: null };
 }
 
 /**
@@ -27,12 +24,12 @@ export async function killOneMainPoolBackend(): Promise<{ killed: boolean; pid: 
  * whole-system-chaos.test.ts's own documented reasoning for why.
  */
 export async function killAllMainPoolBackends(): Promise<number> {
-  const rows = await prisma.$queryRaw<Array<{ pid: number }>>`
-    SELECT pid FROM pg_stat_activity
-    WHERE application_name = 'agentgate-main' AND pid <> pg_backend_pid()
+  const rows = await prisma.$queryRaw<Array<{ pg_terminate_backend: boolean }>>`
+    SELECT pg_terminate_backend(pid)
+    FROM pg_stat_activity
+    WHERE application_name = 'agentgate-main'
+    AND pid <> pg_backend_pid()
   `;
-  for (const row of rows) {
-    await prisma.$queryRaw`SELECT pg_terminate_backend(${row.pid})`;
-  }
+  
   return rows.length;
 }
