@@ -15,6 +15,7 @@ export const auditPrisma =
     adapter: new PrismaPg({
       connectionString: withApplicationName(env.AGENTGATE_DATABASE_URL, "agentgate-audit"),
       max: env.AGENTGATE_AUDIT_DB_POOL_MAX,
+      connectionTimeoutMillis: env.AGENTGATE_AUDIT_DB_POOL_CONNECTION_TIMEOUT_MS,
     }),
     log: ["error", "warn"],
   });

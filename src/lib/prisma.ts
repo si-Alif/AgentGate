@@ -15,6 +15,7 @@ export const prisma =
     adapter: new PrismaPg({
       connectionString: withApplicationName(env.AGENTGATE_DATABASE_URL, "agentgate-main"),
       max : env.AGENTGATE_DB_POOL_MAX,
+      connectionTimeoutMillis: env.AGENTGATE_DB_POOL_CONNECTION_TIMEOUT_MS,
     }),
     log: ["error", "warn"],
   });

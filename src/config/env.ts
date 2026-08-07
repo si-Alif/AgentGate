@@ -44,7 +44,8 @@ const envSchema = z.object({
   AGENTGATE_AUDIT_DB_POOL_MAX: z.coerce.number().int().positive().default(5),
   AGENTGATE_AUDIT_PREVIEW_MAX_BYTES: z.coerce.number().default(8192),
   AGENTGATE_PUBLIC_AUTH_RATE_LIMIT: z.coerce.number().int().positive().default(20), // per minute, per (IP, route)
-
+  AGENTGATE_DB_POOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+  AGENTGATE_AUDIT_DB_POOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
 
   // ═══════════════════════════════════════════════════════
   // Week 5 — Audit compliance
