@@ -15,6 +15,7 @@ import { withTimeout } from "../../lib/timeout.js";
 import {
   closeAllObservabilityConnections,
   closeTenantEventSubscriber,
+  tenantEventSubscriber,
 } from "../../observability/ws-tenant-registry.js";
 
 export interface SystemHarness {
@@ -56,6 +57,7 @@ export async function startFullSystem(): Promise<SystemHarness> {
   // Re-establish Redis connections if they were closed in a previous test run
   await ensureRedisConnected(redis);
   await ensureRedisConnected(rateLimiterRedis);
+  await ensureRedisConnected(tenantEventSubscriber);
 
   const app = await createApp();
   await app.ready();
