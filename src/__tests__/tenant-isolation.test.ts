@@ -15,11 +15,11 @@ describe("Day 6 — Tenant Isolation (DB-scoped proof)", () => {
   beforeAll(async () => {
     app = await createApp();
 
-    tenantA = await createTestTenant(app, { password: "StrongPass123!" });
+    tenantA = await createTestTenant(app);
     created.push(tenantA.tenantId);
 
     // Force distinct tenants by regenerating another fixture
-    tenantB = await createTestTenant(app, { password: "StrongPass123!" });
+    tenantB = await createTestTenant(app);
     created.push(tenantB.tenantId);
   });
 
@@ -48,7 +48,7 @@ describe("Day 6 — Tenant Isolation (DB-scoped proof)", () => {
 
     expect(body.tenantId).toBe(tenantA!.tenantId);
     expect(body.userId).toBe(tenantA!.userId);
-    expect(body.email).toBe(tenantA!.email);
+    expect(body.email).toBe(tenantA?.email);
 
     // Ensure it isn't leaking Tenant B identity.
     expect(body.tenantId).not.toBe(tenantB!.tenantId);
@@ -74,7 +74,7 @@ describe("Day 6 — Tenant Isolation (DB-scoped proof)", () => {
 
     expect(body.tenantId).toBe(tenantB!.tenantId);
     expect(body.userId).toBe(tenantB!.userId);
-    expect(body.email).toBe(tenantB!.email);
+    expect(body.email).toBe(tenantB?.email);
 
     expect(body.tenantId).not.toBe(tenantA!.tenantId);
   });
@@ -99,7 +99,7 @@ describe("Day 6 — Tenant Isolation (DB-scoped proof)", () => {
     // Handler must use request.tenantContext.tenantId (derived from JWT), not query/header.
     expect(body.tenantId).toBe(tenantA!.tenantId);
     expect(body.userId).toBe(tenantA!.userId);
-    expect(body.email).toBe(tenantA!.email);
+    expect(body.email).toBe(tenantA?.email);
   });
 
   it("Soft-deleted Tenant should be rejected from /api/me/details (401)", async () => {

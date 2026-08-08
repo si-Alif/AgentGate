@@ -281,21 +281,27 @@ describe("Week 7 — Official M7 Proof Checkpoint", () => {
     await waitForMessage(ws);
 
     const limit = env.AGENTGATE_MCP_TOOL_CALL_RATE_LIMIT;
-    for (let i = 0; i < limit; i++) {
-      await handleToolsCall({ agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), new AbortController().signal).catch(() => { });
-    }
+
+    // Exhaust the limit concurrently
+    await Promise.all(
+      Array.from({ length: limit }, () =>
+        handleToolsCall({ agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), new AbortController().signal).catch(() => { })
+      )
+    );
 
     const eventPromise = waitForEventType(ws, "RATE_LIMITED");
-    await handleToolsCall({ agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), new AbortController().signal).catch(() => { });
-    const eventFrame = await eventPromise;
 
+    // Trigger the actual rate limit event
+    await handleToolsCall({ agentId: agent.id, tenantId: tenant.tenantId }, { name: tool.name }, performance.now(), new AbortController().signal).catch(() => { });
+
+    const eventFrame = await eventPromise;
     expect(eventFrame.eventType).toBe("RATE_LIMITED");
 
     ws.close();
     await cleanupTenant(tenant.tenantId);
   }, 15_000);
 
-  
+
   it("GATE 11 — cold-start replica sanity: a FRESH registry correctly subscribes and delivers on its first-ever connection", async () => {
     await resetTenantRegistryForTest();
     resetAllConnectionsForTest();
