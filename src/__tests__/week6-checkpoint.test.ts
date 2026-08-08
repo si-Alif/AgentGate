@@ -137,29 +137,42 @@ describe("Week 6 / M6 — Official Proof Checkpoint", () => {
     const tool = await createTestTool(tenant.tenantId);
     const auditWorker = createAuditWorker();
 
-    await permissionService.assignPermission(tenant.tenantId, { agentId: agent.id, toolId: tool.id });
+    try {
+      await permissionService.assignPermission(tenant.tenantId, { agentId: agent.id, toolId: tool.id });
+      const { env } = await import("../config/env.js");
+      const limit = env.AGENTGATE_MCP_TOOL_CALL_RATE_LIMIT;
 
+      // Exhaust the limit concurrently
+      await Promise.all(
+        Array.from({ length: limit }, (_, i) =>
+          app.inject({
+            method: "POST", url: "/mcp",
+            headers: { authorization: `Bearer ${apiKey}` },
+            payload: envelope(`g6-${i}`, "tools/call", { name: tool.name }),
+          })
+        )
+      );
 
-
-    const { env } = await import("../config/env.js");
-    let last;
-    for (let i = 0; i < env.AGENTGATE_MCP_TOOL_CALL_RATE_LIMIT + 1; i++) {
-      last = await app.inject({
+      // Trigger the rate limit explicitly
+      const last = await app.inject({
         method: "POST", url: "/mcp",
         headers: { authorization: `Bearer ${apiKey}` },
-        payload: envelope(`g6-${i}`, "tools/call", { name: tool.name }),
+        payload: envelope(`g6-last`, "tools/call", { name: tool.name }),
       });
+
+      expect(JSON.parse(last.body).error.code).toBe(-32001);
+
+      await waitFor(async () => {
+        expect(
+          await prisma.auditEvent.findFirst({ where: { tenantId: tenant.tenantId, toolId: tool.id, eventType: "RATE_LIMITED" } })
+        ).not.toBeNull();
+      }, { timeoutMs: 20_000 });
+
+    } finally {
+      // Guarantee cleanup even if assertions fail
+      await auditWorker.close();
+      await cleanupTenant(tenant.tenantId);
     }
-    expect(JSON.parse(last!.body).error.code).toBe(-32001);
-
-    await waitFor(async ()=>{
-      expect(
-        await prisma.auditEvent.findFirst({ where: { tenantId: tenant.tenantId, toolId: tool.id, eventType: "RATE_LIMITED" } })
-      ).not.toBeNull();
-    } , { timeoutMs: 20_000 });
-
-    await auditWorker.close();
-    await cleanupTenant(tenant.tenantId);
   }, 20_000);
 
   it("GATE 7 — SSRF-blocked tool target -> -32008, passed through unmodified from M4", async () => {
