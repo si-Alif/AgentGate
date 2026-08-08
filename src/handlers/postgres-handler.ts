@@ -125,7 +125,7 @@ export async function executePostgresHandler(
       return { status: "payload_too_large", error: error.message ?? "Payload limit exceeded" };
     }
     if (err instanceof SsrfBlockedError) {
-      return { status: "error", error: error.message ?? "SSRF blocked" };
+      return { status: "ssrf_blocked", error: error.message ?? "SSRF blocked" };
     }
     if (signal.aborted || err instanceof TimeoutError || error.code === PG_QUERY_CANCELED) {
       return { status: "timeout", error: "PostgreSQL query timed out" };

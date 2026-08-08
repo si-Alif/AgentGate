@@ -74,7 +74,7 @@ export async function executeWebFetchHandler(
       return { status: "unsupported_media_type", error: err.message };
     }
     if (err instanceof SsrfBlockedError) {
-      return { status: "error", error: err.message };
+      return { status: "ssrf_blocked", error: err.message };
     }
     return { status: "error", error: err.message ?? "Unknown WebFetch handler error" };
   }
