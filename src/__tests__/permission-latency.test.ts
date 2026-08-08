@@ -4,7 +4,8 @@ import { createApp } from "../app.js";
 import { checkPermission } from "../lib/permission-engine.js";
 import {
   createTestTenant,
-  createTestAgentToolGrant,
+  createTestAgent,
+  createTestTool,
   cleanupTenant,
 } from "./helpers/test-tenant.factory.js";
 
@@ -30,12 +31,13 @@ describe("checkPermission — latency (informal budget: p95 < 10ms, local Postgr
 
   it("p95 latency stays comfortably under budget against local Postgres", async () => {
     const tenant = await createTestTenant(app);
-    const { agent, tool } = await createTestAgentToolGrant(tenant.tenantId, tenant.userId);
+    const agent = await createTestAgent(tenant.tenantId, tenant.userId);
+    const tool = await createTestTool(tenant.tenantId);
 
     const samples: number[] = [];
     for (let i = 0; i < 200; i++) {
       const start = performance.now();
-      await checkPermission(agent.id, tool.id, tenant.tenantId);
+      await checkPermission(agent.agent.id, tool.id, tenant.tenantId);
       samples.push(performance.now() - start);
     }
 
