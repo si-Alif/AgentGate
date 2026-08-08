@@ -13,7 +13,7 @@ import type { FastifyInstance } from "fastify";
 
 const TEST_PG =
   process.env.AGENTGATE_TEST_DATABASE_URL ??
-  "postgresql://postgres:password@localhost:5432/agentgate?sslmode=disable";
+  "postgresql://postgres:password@127.0.0.1:5432/agentgate?sslmode=disable";
 const permissive = () => ({ isSafe: true });
 
 describe("Week 4 Official Proof Checkpoint — SSRF & Execution Matrix", () => {
@@ -80,7 +80,7 @@ describe("Week 4 Official Proof Checkpoint — SSRF & Execution Matrix", () => {
       {},
       new AbortController().signal
     );
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("ssrf_blocked");
     expect(result.error).toMatch(/^SSRF blocked/);
   });
 
@@ -90,7 +90,7 @@ describe("Week 4 Official Proof Checkpoint — SSRF & Execution Matrix", () => {
       {},
       new AbortController().signal
     );
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("ssrf_blocked");
     expect(result.error).toMatch(/^SSRF blocked/);
   });
 
@@ -121,7 +121,7 @@ describe("Week 4 Official Proof Checkpoint — SSRF & Execution Matrix", () => {
       {},
       new AbortController().signal
     );
-    expect(blocked.status).toBe("error");
+    expect(blocked.status).toBe("ssrf_blocked");
     expect(blocked.error).toMatch(/^SSRF blocked/);
 
     const allowed = await executePostgresHandler(
