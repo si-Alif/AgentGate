@@ -80,13 +80,29 @@ export async function stopFullSystem(harness: SystemHarness): Promise<void> {
     console.warn("[system-harness] tenantEventSubscriber close timed out or failed:", err);
   }
 
-  // 3. Stop accepting new HTTP/MCP/WS-upgrade traffic.
-  await harness.app.close();
+  try {
+    // 3. Stop accepting new HTTP/MCP/WS-upgrade traffic.
+    await harness.app.close();
+  }catch(err){
+    console.warn("[system-harness] app.close() failed:", err);
+  }
 
-  // 4-5. Email worker and queue cleanup
-  await harness.emailWorker.close();
-  await emailQueue.close();
-  await deadLetterEmailQueue.close();
+  try {
+    // 4-5. Email worker and queue cleanup
+    await harness.emailWorker.close();
+  }catch(err){
+    console.warn("[system-harness] emailWorker.close() failed:", err);
+  }
+  try{
+    await emailQueue.close();
+  }catch(err){
+    console.warn("[system-harness] emailQueue.close() failed:", err);
+  }
+  try{
+    await deadLetterEmailQueue.close();
+  }catch(err){
+    console.warn("[system-harness] deadLetterEmailQueue.close() failed:", err);
+  }
 
   // 6-9. Audit infrastructure
   try {
@@ -100,8 +116,18 @@ export async function stopFullSystem(harness: SystemHarness): Promise<void> {
       console.error("[system-harness] error closing audit worker:", err);
     }
   }
-  await auditQueue.close();
-  await deadLetterAuditQueue.close();
+  try{
+    await auditQueue.close();
+  }catch(err){
+    console.warn("[system-harness] auditQueue.close() failed:", err);
+  }
+
+  try {
+    await deadLetterAuditQueue.close();
+  }catch(err){
+    console.warn("[system-harness] deadLetterAuditQueue.close() failed:", err);
+  }
+
   try {
     await auditPrisma.$disconnect();
   }catch(err){
@@ -115,5 +141,10 @@ export async function stopFullSystem(harness: SystemHarness): Promise<void> {
   }catch(err){
     console.warn("[system-harness] prisma.$disconnect() failed:", err);
   }
-  await closeSafeAgent();
+
+  try {
+    await closeSafeAgent();
+  }catch(err){
+    console.warn("[system-harness] closeSafeAgent() failed:", err);
+  }
 }
