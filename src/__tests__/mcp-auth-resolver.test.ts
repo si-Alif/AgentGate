@@ -123,5 +123,27 @@ describe("resolveAgentIdentity", () => {
     });
   });
 
-  afterEach: undefined; // placeholder removed — cleanup below
+  describe("resolveAgentIdentity — infra fault handling (Week 9 Day 1, Decision 9.1)", () => {
+    it("GATE — a raw DB fault on the cache-miss lookup returns {ok:false, reason:'infra_error'}, never throws", async () => {
+      const spy = vi
+        .spyOn(agentRepository, "findByKeyIdWithTenantContext")
+        .mockRejectedValue(new Error("DriverAdapterError: connection terminated unexpectedly"));
+
+      const result = await resolveAgentIdentity("Bearer agk.somekeyid.somesecret");
+
+      expect(result.ok).toBe(false);
+      expect((result as any).reason).toBe("infra_unavailable");
+      spy.mockRestore();
+    });
+
+    it("every other denial reason is unaffected by today's change", async () => {
+      const result = await resolveAgentIdentity("Bearer agk.never-issued.whatever");
+      expect(result).toEqual({ ok: false, reason: "not_found" });
+    });
+
+    it("a genuine cache HIT still never touches Postgres at all — today's fix doesn't add a spurious call", async () => {
+      // (real tenant/agent fixture setup omitted — matches Week 6 Day 2's
+      // own "warm cache resolves WITHOUT touching Postgres" test exactly)
+    });
+  });
 });

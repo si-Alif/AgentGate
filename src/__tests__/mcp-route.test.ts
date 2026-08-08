@@ -134,4 +134,46 @@ describe("POST /mcp — envelope and identity failures (in-body, HTTP 200 + JSON
 
     await cleanupTenant(tenant.tenantId);
   });
+
+  describe("POST /mcp — identity-resolution infra fault (Week 9 Day 1, Decision 9.2)", () => {
+    it("GATE — a raw DB fault during identity resolution maps to -32002, never -32603 or -32009", async () => {
+      const spy = vi.spyOn(agentRepository, "findByKeyIdWithTenantContext").mockRejectedValue(new Error("ECONNRESET"));
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/mcp",
+        headers: { authorization: "Bearer agk.whatever.secret" },
+        payload: { jsonrpc: "2.0", id: "infra-fault-probe", method: "tools/list", _meta: { protocolVersion: "2026-07-28" } },
+      });
+
+      const body = JSON.parse(res.body);
+      expect(body.error.code).toBe(-32002);
+      expect(body.error.code).not.toBe(-32603);
+      expect(body.error.code).not.toBe(-32009);
+      spy.mockRestore();
+    });
+
+    it("REGRESSION — an unknown keyId (a genuine identity decision) still maps to -32009", async () => {
+      const res = await app.inject({
+        method: "POST",
+        url: "/mcp",
+        headers: { authorization: "Bearer agk.never-issued.whatever" },
+        payload: { jsonrpc: "2.0", id: "req", method: "tools/list", _meta: { protocolVersion: "2026-07-28" } },
+      });
+      expect(JSON.parse(res.body).error.code).toBe(-32009);
+    });
+
+    it("proves this affects tools/list too, not only tools/call (Finding F2)", async () => {
+      const spy = vi.spyOn(agentRepository, "findByKeyIdWithTenantContext").mockRejectedValue(new Error("ECONNRESET"));
+      const res = await app.inject({
+        method: "POST",
+        url: "/mcp",
+        headers: { authorization: "Bearer agk.whatever.secret" },
+        payload: { jsonrpc: "2.0", id: "req-2", method: "tools/list", _meta: { protocolVersion: "2026-07-28" } },
+      });
+      expect(JSON.parse(res.body).error.code).toBe(-32002);
+      spy.mockRestore();
+    });
+  });
 });
+
