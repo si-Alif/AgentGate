@@ -157,7 +157,7 @@ describe("executeWebFetchHandler", () => {
       // no overrides — real defaultDnsResolver + real getSafeAgent()
     );
 
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("ssrf_blocked");
     expect(result.error).toMatch(/SSRF blocked/);
   });
 

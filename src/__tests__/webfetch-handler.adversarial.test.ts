@@ -54,7 +54,7 @@ describe("executeWebFetchHandler — literal-IP SSRF regression", () => {
       {},
       new AbortController().signal
     );
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("ssrf_blocked");
     expect(result.error).toMatch(/^SSRF blocked/);
   });
 });

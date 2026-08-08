@@ -164,8 +164,8 @@ describe("executeTool", () => {
 
     it("maps an SSRF-blocked message to errorCode SSRF_BLOCKED", async () => {
       mockedHttp.mockResolvedValue({
-        status: "error",
-        error: "SSRF blocked: evil.example resolves to 127.0.0.1 (loopback)",
+        status: "ssrf_blocked", 
+        error: "SSRF blocked: bad.example.com resolves to 127.0.0.1"
       });
       const tool = await makeHttpTool();
       const result = await executeTool(tool.id, tenant.tenantId, agentId, {});

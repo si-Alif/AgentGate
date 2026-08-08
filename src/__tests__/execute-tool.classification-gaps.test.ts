@@ -87,7 +87,7 @@ describe("executeTool — closing the Day 5 coverage gaps", () => {
 
   describe("SSRF_BLOCKED classifier boundary — proving it's anchored, not a loose substring match", () => {
     it("classifies a genuine SSRF-blocked message as SSRF_BLOCKED", async () => {
-      mockedHttp.mockResolvedValue({ status: "error", error: "SSRF blocked: evil.example resolves to 127.0.0.1 (loopback)" });
+      mockedHttp.mockResolvedValue({ status: "ssrf_blocked", error: "SSRF blocked: evil.example resolves to 127.0.0.1 (loopback)" });
       const tool = await createTestTool(tenant.tenantId, {
         name: "ssrf-classify-probe",
         handlerType: "http",

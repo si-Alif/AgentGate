@@ -78,7 +78,7 @@ describe("executePostgresHandler — SSRF Layer 2 (two-sided gate)", () => {
   it("blocks localhost by default — real resolver, no overrides", async () => {
     const result = await executePostgresHandler(makeConfig("SELECT 1"), {}, new AbortController().signal);
 
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("ssrf_blocked");
     expect(result.error ?? "").toMatch(/SSRF blocked/i);
   });
 

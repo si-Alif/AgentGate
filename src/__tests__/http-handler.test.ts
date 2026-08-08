@@ -116,8 +116,11 @@ describe("executeHttpHandler — SSRF pre-flight enforcement", () => {
     const resolverSpy = vi.fn();
     const config = baseConfig({ url: "http://127.0.0.1:9999/anything" });
     const result = await executeHttpHandler(config, {}, new AbortController().signal, resolverSpy);
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/^SSRF blocked/);
+
+    // CHANGE THIS:
+    expect(result.status).toBe("ssrf_blocked");
+
+    expect(result.error).toMatch(/^SSRF blocked/i); // (Optional: Add 'i' flag for case-insensitivity just in case)
     expect(resolverSpy).not.toHaveBeenCalled();
   });
 
@@ -125,8 +128,11 @@ describe("executeHttpHandler — SSRF pre-flight enforcement", () => {
     const resolverSpy = vi.fn();
     const config = baseConfig({ url: `http://${UNSAFE_IP}/latest/meta-data/` });
     const result = await executeHttpHandler(config, {}, new AbortController().signal, resolverSpy);
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/^SSRF blocked/);
+
+    // CHANGE THIS:
+    expect(result.status).toBe("ssrf_blocked");
+
+    expect(result.error).toMatch(/^SSRF blocked/i);
     expect(resolverSpy).not.toHaveBeenCalled();
   });
 
@@ -134,8 +140,11 @@ describe("executeHttpHandler — SSRF pre-flight enforcement", () => {
     const resolverSpy = vi.fn();
     const config = baseConfig({ url: "http://[::1]:9999/anything" });
     const result = await executeHttpHandler(config, {}, new AbortController().signal, resolverSpy);
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/^SSRF blocked/);
+
+    // CHANGE THIS:
+    expect(result.status).toBe("ssrf_blocked");
+
+    expect(result.error).toMatch(/^SSRF blocked/i);
     expect(resolverSpy).not.toHaveBeenCalled();
   });
 
@@ -143,7 +152,10 @@ describe("executeHttpHandler — SSRF pre-flight enforcement", () => {
     const resolverSpy = vi.fn();
     const config = baseConfig({ url: "http://[::ffff:169.254.169.254]/x" });
     const result = await executeHttpHandler(config, {}, new AbortController().signal, resolverSpy);
-    expect(result.status).toBe("error");
+
+    // CHANGE THIS:
+    expect(result.status).toBe("ssrf_blocked");
+
     expect(resolverSpy).not.toHaveBeenCalled();
   });
 });
@@ -178,12 +190,8 @@ describe("executeHttpHandler — connect-time lookup hook (defense-in-depth, not
       reboundAgent
     );
 
-    expect(result.status).toBe("error");
-    // If this specific assertion ever fails while `result.status` is
-    // still "error", it means undici is wrapping/losing the original
-    // SsrfBlockedError's message somewhere in its connection-error
-    // path — verify against your pinned undici version and add a
-    // `.cause` fallback to the handler's catch block if so.
+    expect(result.status).toBe("ssrf_blocked");
+
     expect(result.error).toMatch(/ssrf blocked/i);
   });
 
