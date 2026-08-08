@@ -49,12 +49,32 @@ async function startServer() {
         }
       });
 
-      await timedShutdownStep("http-listener", () => app.close());            // 1. stop new HTTP/SSE
+      await timedShutdownStep("http-listener", async() => {
+        try{
+          app.close()
+        }catch(err){
+          app.log.warn({ err }, "app.close() failed — continuing shutdown");
+        }
+      });            // 1. stop new HTTP/SSE
 
-      await timedShutdownStep("email-worker", () => emailWorker.close());
+      await timedShutdownStep("email-worker", async() => {
+        try {
+          await emailWorker.close();
+        } catch (err) {
+          app.log.warn({ err }, "emailWorker.close() failed — continuing shutdown");
+        }
+      });
       await timedShutdownStep("email-queues", async () => {    // 2. drain email
-        await emailQueue.close();
-        await deadLetterEmailQueue.close();
+        try{
+          await emailQueue.close();
+        }catch(err){
+          app.log.warn({ err }, "emailQueue.close() failed — continuing shutdown");
+        }
+        try{
+          await deadLetterEmailQueue.close();
+        }catch(err){
+          app.log.warn({ err }, "deadLetterEmailQueue.close() failed — continuing shutdown");
+        }
       });
       // 3. Bounded audit worker shutdown
       app.log.info("Draining audit worker...");
@@ -111,7 +131,13 @@ async function startServer() {
         }
       })
 
-      await timedShutdownStep("safe-http-agent", () => closeSafeAgent());        // 7. outbound HTTP
+      await timedShutdownStep("safe-http-agent", async() =>{
+        try {
+          closeSafeAgent();        // 7. outbound HTTP
+        }catch(err){
+          app.log.warn({ err }, "closeSafeAgent() failed — continuing shutdown");
+        }
+      });
 
       app.log.info("Server closed gracefully.");
       process.exit(0);
