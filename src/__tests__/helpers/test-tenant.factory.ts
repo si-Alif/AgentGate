@@ -13,6 +13,8 @@ export interface TestTenantContext {
   tenantId: string;
   userId: string;
   accessToken: string;
+  email ?: string;
+  refreshToken ?: string;
 }
 
 export async function createTestTenant(app: FastifyInstance): Promise<TestTenantContext> {
@@ -49,9 +51,9 @@ export async function createTestTenant(app: FastifyInstance): Promise<TestTenant
     url: "/auth/login",
     payload: { email, password },
   });
-  const { accessToken } = JSON.parse(loginRes.body) as { accessToken: string };
+  const { accessToken, refreshToken } = JSON.parse(loginRes.body) as { accessToken: string; refreshToken: string };
 
-  return { tenantId: user.tenantId, userId: user.id, accessToken };
+  return { tenantId: user.tenantId, userId: user.id, accessToken , refreshToken, email: user.email };
 }
 
 export async function createTestAgent(tenantId: string, createdByUserId: string) {

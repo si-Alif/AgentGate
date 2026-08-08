@@ -1,7 +1,7 @@
 import {Ajv} from "ajv";
 import { checkSchemaComplexity, scanForUnsafeRegexPatterns } from "./schema-safety.js";
 
-const ajv = new Ajv({ strict: true, allErrors: true });
+const ajv = new Ajv({ strict: false, allErrors: true });
 
 export interface SchemaValidationResult {
   valid: boolean;
