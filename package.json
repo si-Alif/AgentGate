@@ -11,8 +11,10 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "test": "vitest",
+    "start:mock-server": "node src/mock/mock-server.ts",
     "test:watch": "vitest --watch",
-    "test:load": "vitest run src/__tests__/load --pool=forks --poolOptions.forks.singleFork=true",
+    "test:load": "TEST_TYPE=load vitest run src/__tests__/load --pool=forks",
+    "test:resilience": "TEST_TYPE=resilience vitest run src/__tests__/resilience",
     "lint": "tsc --noEmit"
   },
   "keywords": [

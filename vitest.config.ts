@@ -1,15 +1,20 @@
+// vitest.config.ts
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
     environment: "node",
-    // No functional test in the roadmap requires cross-file concurrency.
-    // All concurrency proofs (M3, M8) run intra-test via Promise.all
-    // against one live app instance. Serializing files removes the
-    // shared-singleton race entirely without sharding infrastructure.
     fileParallelism: false,
     setupFiles: ["./src/__tests__/helpers/setup.ts"],
-    exclude: ["**/node_modules/**", "**/dist/**", "src/__tests__/load/**"],
+    // Conditionally exclude directories based on the TEST_TYPE env variable
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      ...(process.env.TEST_TYPE === "load" ? [] : ["src/__tests__/load/**"]),
+      ...(process.env.TEST_TYPE === "resilience" ? [] : ["src/__tests__/resilience/**"])
+    ],
     hookTimeout: 15_000,
+    pool: "forks",
+    maxWorkers: 1,
   },
 });
