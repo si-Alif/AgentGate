@@ -27,6 +27,7 @@ const toolInvocationEventSchema = z.object({
   eventType: z.literal("TOOL_INVOCATION"),
   status: z.enum(["success", "error", "timeout", "payload_too_large", "unsupported_media_type" , "ssrf_blocked"]),
   gatewayOverheadMs : z.number().int().nonnegative().optional(),
+  executeToolDbLookupMs: z.number().int().nonnegative().optional(),
 });
 
 // STUB — no caller until Week 6 wires checkPermission()'s denial path

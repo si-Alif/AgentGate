@@ -38,6 +38,7 @@ export async function executeTool(
   gatewayOverheadMs?: number
 ): Promise<ExecutionResult> {
   const startedAt = new Date();
+  let executeToolDbLookupMs: number | undefined;
 
   const audit = (result: ExecutionResult): void => {
     const completedAt = new Date();
@@ -72,6 +73,10 @@ export async function executeTool(
       payload.gatewayOverheadMs = gatewayOverheadMs;
     }
 
+    if (executeToolDbLookupMs !== undefined) {
+      payload.executeToolDbLookupMs = executeToolDbLookupMs;
+    }
+
     enqueueAuditEvent(payload);
   };
 
@@ -97,7 +102,9 @@ export async function executeTool(
     let tool: Awaited<ReturnType<typeof toolRepository.findById>>;
 
     try {
+      const dbStart = performance.now();
       tool = await toolRepository.findById(toolId, tenantId);
+      executeToolDbLookupMs = Math.round(performance.now() - dbStart);
     }catch (err : unknown ){
       const message = err instanceof Error ? err.message : String(err);
       return finish({ status: "error", error: `Tool lookup failed: ${message}` }, "INFRA_UNAVAILABLE");
