@@ -109,6 +109,8 @@ export function formatMcpErrorResponse(
   error: unknown,
   requestId: string | number | null = null
 ): JsonRpcErrorResponse {
+
+  console.error("[MCP Gateway] error response:", error);
   if (error instanceof McpGatewayError) {
     return {
       jsonrpc: "2.0",
