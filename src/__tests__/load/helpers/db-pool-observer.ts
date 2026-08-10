@@ -1,21 +1,6 @@
-import { prisma } from "../../../lib/prisma.js";
-import { auditPrisma } from "../../../lib/audit-prisma.js";
+// db-pool-observer.ts
 
-/**
- * Week 8 Day 3 — Decision 8.66 (Finding F4). Polls pg_stat_activity,
- * discriminating by application_name (Step 2/3's patch) rather than
- * needing direct pg.Pool access — sidesteps the @prisma/adapter-pg
- * constructor-shape uncertainty flagged in §A.7 entirely.
- *
- * Uses the SAME singleton clients this observer is measuring to run
- * the polling query itself — a small, accepted, "precisely stated"
- * observer-effect (Week 3's own established pattern for this class
- * of imprecision): each poll consumes one connection FROM the pool
- * being measured, for the brief duration of the query. Deliberately
- * NOT a third, separate pool — a separate pool would itself distort
- * the very connection-count formula (Decision 8.14/8.37) today's run
- * is supposed to validate.
- */
+import { prisma } from "../../../lib/prisma.js";
 
 export interface PoolSample {
   timestamp: number;
@@ -29,8 +14,10 @@ export interface PoolSummary {
   configuredMax: number;
   peakTotal: number;
   peakActive: number;
+  averageTotal: number;  // NEW: Needed for Little's Law application
+  averageActive: number; // NEW: Needed for Little's Law application
   sampleCount: number;
-  sustainedAtMaxCount: number; // samples where total === configuredMax
+  sustainedAtMaxCount: number;
 }
 
 async function sampleOne(applicationName: string): Promise<Omit<PoolSample, "timestamp">> {
@@ -58,9 +45,11 @@ export class DbPoolObserver {
 
   start(): void {
     this.timer = setInterval(() => {
-      void sampleOne(this.applicationName).then((s) => {
-        this.samples.push({ timestamp: Date.now(), ...s });
-      });
+      sampleOne(this.applicationName)
+        .then((s) => {
+          this.samples.push({ timestamp: Date.now(), ...s });
+        })
+        .catch(() => { });
     }, this.intervalMs);
   }
 
@@ -72,29 +61,28 @@ export class DbPoolObserver {
   summary(): PoolSummary {
     const peakTotal = this.samples.reduce((max, s) => Math.max(max, s.total), 0);
     const peakActive = this.samples.reduce((max, s) => Math.max(max, s.active), 0);
+
+    // NEW: Compute averages
+    const sumTotal = this.samples.reduce((sum, s) => sum + s.total, 0);
+    const sumActive = this.samples.reduce((sum, s) => sum + s.active, 0);
+    const averageTotal = this.samples.length ? Math.round(sumTotal / this.samples.length) : 0;
+    const averageActive = this.samples.length ? Math.round(sumActive / this.samples.length) : 0;
+
     const sustainedAtMaxCount = this.samples.filter((s) => s.total >= this.configuredMax).length;
+
     return {
       applicationName: this.applicationName,
       configuredMax: this.configuredMax,
       peakTotal,
       peakActive,
+      averageTotal,
+      averageActive,
       sampleCount: this.samples.length,
       sustainedAtMaxCount,
     };
   }
 }
 
-/**
- * Week 8 Day 3 — Decision 8.72. Turns an observed summary into a
- * concrete, reasoned recommendation, WITHOUT asserting a specific new
- * pool-size number that hasn't actually been measured (see
- * roadmap_w8_d3.md §A "What I'm Deliberately Not Changing"). If the
- * pool was NEVER observed pinned at its configured max, the existing
- * default is confirmed sufficient for this run's profile. If it WAS
- * sustained at max for a meaningful fraction of samples, this
- * recommends a specific new value with its own reasoning — the human
- * (or a future Day 7 pass) applies it.
- */
 export function recommendPoolSize(summary: PoolSummary): { sufficient: boolean; recommendation: string } {
   const saturationRatio = summary.sampleCount > 0 ? summary.sustainedAtMaxCount / summary.sampleCount : 0;
 
@@ -103,18 +91,21 @@ export function recommendPoolSize(summary: PoolSummary): { sufficient: boolean; 
       sufficient: true,
       recommendation:
         `${summary.applicationName}: peak observed ${summary.peakTotal}/${summary.configuredMax} ` +
-        `connections, pinned at max for only ${(saturationRatio * 100).toFixed(1)}% of samples — ` +
-        `CONFIRMED sufficient for this run's profile, no change recommended.`,
+        `(avg active: ${summary.averageActive}). ` +
+        `Pinned at max for only ${(saturationRatio * 100).toFixed(1)}% of samples — ` +
+        `CONFIRMED sufficient. No change recommended.`,
     };
   }
 
-  const recommendedMax = Math.ceil(summary.configuredMax * 1.5) + 5; // headroom, not a guess at exact demand
+  // Instead of blindly recommending 1.5x + 5, we now present the average active connections
+  // to allow engineers to apply Little's Law directly to fix the bottleneck.
+  const recommendedMax = Math.ceil(summary.configuredMax * 1.5) + 5;
   return {
     sufficient: false,
     recommendation:
-      `${summary.applicationName}: pinned at its configured max (${summary.configuredMax}) for ` +
-      `${(saturationRatio * 100).toFixed(1)}% of samples — likely a real bottleneck under this load. ` +
-      `Recommended new value: ${recommendedMax} (1.5x + 5 headroom over the observed ceiling). ` +
-      `Re-run this suite after applying the change to confirm.`,
+      `${summary.applicationName}: pinned at max (${summary.configuredMax}) for ` +
+      `${(saturationRatio * 100).toFixed(1)}% of samples. ` +
+      `Avg active connections during run: ${summary.averageActive}. ` +
+      `Apply Little's Law using true elapsed ms and this avg to find optimal size (Heuristic suggests: ${recommendedMax}).`,
   };
 }

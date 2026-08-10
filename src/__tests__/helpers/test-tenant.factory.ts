@@ -98,9 +98,14 @@ export async function createTestTool(tenantId: string, overrides: CreateTestTool
  * URL at creation time, exactly why every prior week's own tests
  * already work around it this same way.
  */
-export async function createSsrfBlockedTool(tenantId: string, name?: string) {
+export async function createSsrfBlockedTool(
+  tenantId: string,
+  name?: string,
+  url?: string
+) {
+  const targetUrl = url ?? "http://127.0.0.1:1/probe";
   const ciphertext = encryptConfig(
-    JSON.stringify({ handlerType: "http", url: "http://127.0.0.1:1/probe", method: "GET" }),
+    JSON.stringify({ handlerType: "http", url: targetUrl, method: "GET" }),
     tenantId
   );
   return prisma.tool.create({
