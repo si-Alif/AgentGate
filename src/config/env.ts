@@ -14,7 +14,7 @@ const envSchema = z.object({
   AGENTGATE_REFRESH_TOKEN_SECRET: z.string().length(64),
 
   AGENTGATE_PLATFORM_ENCRYPTION_KEY: z.string().length(64),
-  AGENTGATE_PORT: z.coerce.number().default(4000),
+  AGENTGATE_PORT: z.coerce.number().default(3000),
   AGENTGATE_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   AGENTGATE_NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
