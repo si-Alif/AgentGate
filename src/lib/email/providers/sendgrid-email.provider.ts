@@ -3,7 +3,7 @@ import { env } from "../../../config/env.js";
 import { PermanentEmailError, TransientEmailError } from "../email-provider.js";
 import type { EmailProvider, OutboundEmail, EmailSendResult } from "../email-provider.js";
 
-const SENDGRID_ENDPOINT = "https://api.sendgrid.com/v3/mail/send";
+const SENDGRID_ENDPOINT = 'https://send.api.mailtrap.io/api/send';
 
 /**
  * Calls SendGrid's v3 Mail Send API directly via undici — zero new
@@ -13,7 +13,7 @@ const SENDGRID_ENDPOINT = "https://api.sendgrid.com/v3/mail/send";
  * TransientEmailError (the queue's own backoff is the right tool).
  */
 export class SendGridEmailProvider implements EmailProvider {
-  readonly name = "sendgrid";
+  readonly name = "mailtrap";
 
   async send(message: OutboundEmail): Promise<EmailSendResult> {
     if (!env.AGENTGATE_SENDGRID_API_KEY) {
