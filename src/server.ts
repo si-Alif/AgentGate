@@ -13,7 +13,12 @@ import { auditPrisma } from "./lib/audit-prisma.js";
 import { withTimeout } from "./lib/timeout.js";
 import { closeAllObservabilityConnections, closeTenantEventSubscriber } from "./observability/ws-tenant-registry.js";
 
+import { assertProductionSafety } from "./config/production-safety-guard.js";
+
 async function startServer() {
+
+  assertProductionSafety();
+
   const app = await createApp();
   const emailWorker = createEmailWorker();
   const auditWorker = createAuditWorker();
