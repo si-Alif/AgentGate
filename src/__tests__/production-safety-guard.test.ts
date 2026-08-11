@@ -45,7 +45,7 @@ describe("assertProductionSafety — Decision 9.17", () => {
     env.AGENTGATE_INVITATION_TOKEN_SECRET = "K7pQ2mX9vB4nR8sT1wY6zA3cD5fG0hJ321"; // >= 32 chars
     env.AGENTGATE_DATABASE_URL = "postgresql://svc:aB9kL2mN7pQ4rS1t@db.example.com:5432/db";
     env.AGENTGATE_REDIS_URL = "redis://svc:aB9kL2mN7pQ4rS1t@redis.example.com:6379";
-    env.AGENTGATE_SENDGRID_API_KEY = "smtp";
+    env.AGENTGATE_EMAIL_PROVIDER = "sendgrid";
 
     const { assertProductionSafety } = await import("../config/production-safety-guard.js");
     assertProductionSafety();
