@@ -42,12 +42,13 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
   // own body-parser failures. Distinct from app.ts's REST-scoped
   // handler; Fastify's plugin encapsulation makes this safe.
   app.setErrorHandler((error: FastifyError, request, reply) => {
-    request.log.error({ err: error }, "Unhandled error in MCP gateway");
     const requestId = extractRequestId(request.body);
 
     if (error instanceof McpGatewayError) {
       return reply.status(200).send(formatMcpErrorResponse(error, requestId));
     }
+    
+    request.log.error({ err: error }, "Unhandled error in MCP gateway");
 
     if (error.statusCode !== undefined && error.statusCode < 500) {
       // A client-side failure Fastify itself rejected before the
@@ -130,6 +131,8 @@ export async function mcpGatewayRoutes(app: FastifyInstance) {
 
     const identity = await resolveAgentIdentity(request.headers.authorization);
     if (!identity.ok) {
+      app.log.error(`[mcp-gateway] identity resolution failed: ${identity.reason}`);
+
       const signal = identity.reason === "infra_unavailable" ? "SERVICE_DEGRADED" : "IDENTITY_INVALID";
       return reply
         .status(200)
