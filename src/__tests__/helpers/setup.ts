@@ -1,18 +1,19 @@
 // src/__tests__/helpers/setup.ts
 import dotenv from "dotenv";
 import path from "path";
+import { afterAll } from "vitest";
 
-// Force load .env.test and override any empty local .env placeholders
+// 1. Force load .env.test FIRST
 dotenv.config({ path: path.resolve(process.cwd(), ".env.test"), override: true });
 
-import { afterAll } from "vitest";
-import { prisma } from "../../lib/prisma.js";
-import { auditPrisma } from "../../lib/audit-prisma.js";
-import { redis } from "../../lib/redis.js";
-import { rateLimiterRedis } from "../../lib/rate-limiter.js";
-import { closeTenantEventSubscriber } from "../../observability/ws-tenant-registry.js";
-
+// 2. Use Dynamic Imports inside the hook so they evaluate AFTER dotenv runs
 afterAll(async () => {
+  const { prisma } = await import("../../lib/prisma.js");
+  const { auditPrisma } = await import("../../lib/audit-prisma.js");
+  const { redis } = await import("../../lib/redis.js");
+  const { rateLimiterRedis } = await import("../../lib/rate-limiter.js");
+  const { closeTenantEventSubscriber } = await import("../../observability/ws-tenant-registry.js");
+
   await prisma.$disconnect().catch(() => { });
   await auditPrisma.$disconnect().catch(() => { });
 
