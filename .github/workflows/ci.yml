@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: agentgate_test
+          POSTGRES_USER: agentgate
+          POSTGRES_PASSWORD: agentgate_test_password
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U agentgate -d agentgate_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      AGENTGATE_NODE_ENV: test
+
+      AGENTGATE_DATABASE_URL: postgresql://agentgate:agentgate_test_password@localhost:5432/agentgate_test
+      AGENTGATE_REDIS_URL: redis://localhost:6379
+
+      # Test-only secrets. These are NOT production secrets.
+      AGENTGATE_JWT_SECRET: ci-test-jwt-secret-7f4b2c9a6e1d8f3a5b7c9d2e4f6a8b1c
+      AGENTGATE_PLATFORM_ENCRYPTION_KEY: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
+      AGENTGATE_API_KEY_PEPPER: ci-test-api-key-pepper-9d3f7a1c5b8e2d6f4a9c1b7e3d5f8a2c
+      AGENTGATE_INVITATION_TOKEN_SECRET: ci-test-invitation-secret-4e8a2c6f1b9d3a7e5c2f8a1d6b4e9c3f
+
+      AGENTGATE_EMAIL_PROVIDER: console
+      AGENTGATE_APP_BASE_URL: http://localhost:3000
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Apply database migrations
+        run: npx prisma migrate deploy
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Run test suite
+        run: npm test
+
+  build:
+    name: Docker Build
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image for pull request
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+
+      - name: Log in to GitHub Container Registry
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+
