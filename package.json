@@ -10,7 +10,7 @@
     "dev": "tsx src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "vitest",
+    "test": "vitest run --pool=forks",
     "start:mock-server": "node src/mock/mock-server.ts",
     "test:watch": "vitest --watch",
     "test:load": "TEST_TYPE=load vitest run src/__tests__/load --pool=forks",
