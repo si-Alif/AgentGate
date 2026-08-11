@@ -40,10 +40,13 @@ describe("assertProductionSafety — Decision 9.17", () => {
     env.AGENTGATE_NODE_ENV = "production";
 
     // Satisfy all policy constraints checked by assertProductionSafety
-    env.AGENTGATE_JWT_SECRET = "K7pQ2mX9vB4nR8sT1wY6zA3cD5fG0hJ321"; // >= 32 chars
-    env.AGENTGATE_PLATFORM_ENCRYPTION_KEY = "a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890"; // >= 64 chars
-    env.AGENTGATE_API_KEY_PEPPER = "K7pQ2mX9vB4nR8sT1wY6zA3cD5fG0hJ321"; // >= 32 chars
-    env.AGENTGATE_INVITATION_TOKEN_SECRET = "K7pQ2mX9vB4nR8sT1wY6zA3cD5fG0hJ321"; // >= 32 chars
+    env.AGENTGATE_JWT_SECRET = "K7pQ2mX9vB4nR8sT1wY6zA3cD5fG0hJ321";
+    env.AGENTGATE_PLATFORM_ENCRYPTION_KEY = "a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890";
+
+    // UPDATE THIS LINE TO BE 64 CHARACTERS:
+    env.AGENTGATE_API_KEY_PEPPER = "a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890";
+
+    env.AGENTGATE_INVITATION_TOKEN_SECRET = "K7pQ2mX9vB4nR8sT1wY6zA3cD5fG0hJ321";
     env.AGENTGATE_DATABASE_URL = "postgresql://svc:aB9kL2mN7pQ4rS1t@db.example.com:5432/db";
     env.AGENTGATE_REDIS_URL = "redis://svc:aB9kL2mN7pQ4rS1t@redis.example.com:6379";
     env.AGENTGATE_EMAIL_PROVIDER = "sendgrid";
