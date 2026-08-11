@@ -3,7 +3,7 @@ import { executePostgresHandler } from "../handlers/postgres-handler.js";
 
 // Day 6 finding: literal IP, not "localhost" — see Block A / §1.2.
 const TEST_PG =
-  process.env.AGENTGATE_TEST_DATABASE_URL ??
+  process.env.AGENTGATE_DATABASE_URL ??
   "postgresql://postgres:password@localhost:5432/agentgate?sslmode=disable";
 
 const permissive = () => ({ isSafe: true });

@@ -22,7 +22,7 @@ vi.mock("../lib/dns-security.js", async (importOriginal) => {
  * confirmed cause of every failure except the SSRF-block test.
  */
 const TEST_PG =
-  process.env.AGENTGATE_TEST_DATABASE_URL ??
+  process.env.AGENTGATE_DATABASE_URL ??
   "postgresql://postgres:password@localhost:5432/agentgate?sslmode=disable";
 
 // Typed against the real ResolvedTarget so a field-name drift (e.g.

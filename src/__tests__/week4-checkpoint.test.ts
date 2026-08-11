@@ -1,4 +1,4 @@
-import { describe, it, expect, vi , beforeAll , afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { MockAgent } from "undici";
 import { assertSafeUrlHost, resolveAndValidate } from "../lib/dns-security.js";
 import { SsrfBlockedError } from "../handlers/types.js";
@@ -12,7 +12,7 @@ import { createApp } from "../app.js";
 import type { FastifyInstance } from "fastify";
 
 const TEST_PG =
-  process.env.AGENTGATE_TEST_DATABASE_URL ??
+  process.env.AGENTGATE_DATABASE_URL ??
   "postgresql://postgres:password@127.0.0.1:5432/agentgate?sslmode=disable";
 const permissive = () => ({ isSafe: true });
 
