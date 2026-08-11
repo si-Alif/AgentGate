@@ -10,10 +10,11 @@ import { toolService } from "../services/tool.service.js";
 import { createTestTenant, createTestAgent, cleanupTenant } from "./helpers/test-tenant.factory.js";
 import { createApp } from "../app.js";
 import type { FastifyInstance } from "fastify";
+import {env} from "../config/env.js";
 
 const TEST_PG =
-  process.env.AGENTGATE_DATABASE_URL ??
-  "postgresql://postgres:password@127.0.0.1:5432/agentgate?sslmode=disable";
+  env.AGENTGATE_DATABASE_URL ??
+  "postgresql://agentgate:agentgate_test_password@127.0.0.1:5432/agentgate_test?sslmode=disable";
 const permissive = () => ({ isSafe: true });
 
 describe("Week 4 Official Proof Checkpoint — SSRF & Execution Matrix", () => {

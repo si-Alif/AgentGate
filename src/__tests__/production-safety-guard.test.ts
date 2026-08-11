@@ -5,6 +5,7 @@ describe("assertProductionSafety — Decision 9.17", () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    // vi.resetModules();
     exitSpy = vi.spyOn(process, "exit").mockImplementation((() => { }) as any);
     vi.spyOn(console, "error").mockImplementation(() => { });
   });

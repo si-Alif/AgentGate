@@ -4,6 +4,7 @@ import * as dnsSecurity from "../lib/dns-security.js";
 import type { ResolvedTarget } from "../lib/dns-security.js"; // Step 0: confirm this type name/shape — adjust if your export differs
 import type { PostgresHandlerConfig } from "../lib/handler-config.schema.js";
 import pg from "pg";
+import {env} from "../config/env.js";
 
 vi.mock("../lib/dns-security.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/dns-security.js")>();
@@ -22,8 +23,8 @@ vi.mock("../lib/dns-security.js", async (importOriginal) => {
  * confirmed cause of every failure except the SSRF-block test.
  */
 const TEST_PG =
-  process.env.AGENTGATE_DATABASE_URL ??
-  "postgresql://postgres:password@localhost:5432/agentgate?sslmode=disable";
+  env.AGENTGATE_DATABASE_URL ??
+  "postgresql://agentgate:agentgate_test_password@localhost:5432/agentgate_test?sslmode=disable";
 
 // Typed against the real ResolvedTarget so a field-name drift (e.g.
 // .ip vs .ipAddress, or a missing field) fails to COMPILE here, rather

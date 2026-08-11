@@ -39,7 +39,7 @@ jobs:
       AGENTGATE_NODE_ENV: test
 
       DATABASE_URL: postgresql://agentgate:agentgate_test_password@localhost:5432/agentgate_test
-      AGENTGATE_DATABASE_URL: postgresql://agentgate:agentgate_test_password@localhost:5432/agentgate_test
+      AGENTGATE_DATABASE_URL: "postgresql://agentgate:agentgate_test_password@127.0.0.1:5432/agentgate_test?sslmode=disable"
       AGENTGATE_REDIS_URL: redis://localhost:6379
 
       # Valid 64-character hex strings required by env.ts validation
@@ -52,6 +52,7 @@ jobs:
 
       AGENTGATE_EMAIL_PROVIDER: console
       AGENTGATE_APP_BASE_URL: http://localhost:3000
+      AGENTGATE_MCP_TOOL_CALL_RATE_LIMIT: 50
 
     steps:
       - name: Checkout repository

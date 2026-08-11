@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { executePostgresHandler } from "../handlers/postgres-handler.js";
+import {env} from "../config/env.js";
 
 // Day 6 finding: literal IP, not "localhost" — see Block A / §1.2.
 const TEST_PG =
-  process.env.AGENTGATE_DATABASE_URL ??
-  "postgresql://postgres:password@localhost:5432/agentgate?sslmode=disable";
+  env.AGENTGATE_DATABASE_URL ??
+  "postgresql://agentgate:agentgate_test_password@localhost:5432/agentgate_test?sslmode=disable";
 
 const permissive = () => ({ isSafe: true });
 
