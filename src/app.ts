@@ -26,6 +26,7 @@ import { requireActiveIdentity } from "./hooks/require-active-identity.hook.js";
 import { getTenantContext,getActiveUser } from "./lib/request-context.js";
 import { redactTicketFromUrl } from "./lib/request-log-redaction.js";
 
+const isProduction = process.env.NODE_ENV === "production";
 
 export async function createApp(): Promise<FastifyInstance> {
   const logger: Record<string, unknown> = {
@@ -44,7 +45,7 @@ export async function createApp(): Promise<FastifyInstance> {
     },
   };
 
-  if (env.AGENTGATE_NODE_ENV === "development") {
+  if (!isProduction) {
     logger.transport = {
       target: "pino-pretty",
       options: {

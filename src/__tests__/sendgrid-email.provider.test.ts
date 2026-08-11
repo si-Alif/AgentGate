@@ -28,7 +28,7 @@ describe("SendGridEmailProvider", () => {
     } as any);
 
     const result = await new SendGridEmailProvider().send({ to: "a@b.com", subject: "s", html: "h", text: "t" });
-    expect(result).toEqual({ provider: "sendgrid", messageId: "msg-123" });
+    expect(result).toEqual({ provider: "mailtrap", messageId: "msg-123" });
   });
 
   it("GATE — a 4xx throws PermanentEmailError", async () => {

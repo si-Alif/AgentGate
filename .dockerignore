@@ -1,0 +1,15 @@
+# .dockerignore
+node_modules
+dist
+.env
+.env.*
+!.env.example
+**/*.test.ts
+src/__tests__
+.git
+.github
+coverage
+*.md
+docker-compose.yml
+Dockerfile
+.dockerignore

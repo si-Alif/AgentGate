@@ -30,6 +30,28 @@ services:
       timeout: 5s
       retries: 5
 
+  platform:
+    build: { context: ., dockerfile: Dockerfile }
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports: ["3000:3000"]
+    environment:
+      AGENTGATE_NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:password@postgres:5432/agentgate
+      AGENTGATE_DATABASE_URL: postgresql://postgres:password@postgres:5432/agentgate
+      AGENTGATE_REDIS_URL: redis://redis:6379
+      AGENTGATE_DB_POOL_MAX: "20"
+      AGENTGATE_AUDIT_DB_POOL_MAX: "5"
+      AGENTGATE_TRUST_PROXY_HOPS: "0"
+      AGENTGATE_JWT_SECRET: ${AGENTGATE_JWT_SECRET}
+      AGENTGATE_PLATFORM_ENCRYPTION_KEY: ${AGENTGATE_PLATFORM_ENCRYPTION_KEY}
+      AGENTGATE_API_KEY_PEPPER: ${AGENTGATE_API_KEY_PEPPER}
+      AGENTGATE_INVITATION_TOKEN_SECRET: ${AGENTGATE_INVITATION_TOKEN_SECRET}
+      AGENTGATE_EMAIL_PROVIDER: console
+      AGENTGATE_APP_BASE_URL: http://localhost:3000
+      AGENTGATE_PASSWORD_PEPPER: ${AGENTGATE_PASSWORD_PEPPER}
+      AGENTGATE_REFRESH_TOKEN_SECRET: ${AGENTGATE_REFRESH_TOKEN_SECRET}
 volumes:
   postgres_data:
   redis_data:
