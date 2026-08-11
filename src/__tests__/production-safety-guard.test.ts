@@ -50,6 +50,7 @@ describe("assertProductionSafety — Decision 9.17", () => {
 
     // ADD THIS LINE:
     env.AGENTGATE_APP_BASE_URL = "https://app.example.com";
+    env.AGENTGATE_SENDGRID_API_KEY = "SG.CryptedMockApiKeyForTesting123456789";
 
     const { assertProductionSafety } = await import("../config/production-safety-guard.js");
     assertProductionSafety();
