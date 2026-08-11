@@ -14,10 +14,6 @@ import {
   createTestAgent,
   createTestTool,
   cleanupTenant,
-  type TestTenantHandle,
-  type TestToolHandlerType,
-  type TestToolInterface,
-  type TestAgentCreationResult,
 } from "./helpers/test-tenant.factory.js";
 
 function makeToolInvocationPayload(
@@ -61,9 +57,9 @@ async function waitFor(assertion: () => Promise<void>, timeoutMs = 5000, interva
 describe("persistAuditEvent — direct, deterministic (no BullMQ involved)", () => {
 
   let app: FastifyInstance;
-  let tenant : TestTenantHandle;
-  let agent : TestAgentCreationResult;
-  let tool : TestToolInterface;
+  let tenant : Awaited<ReturnType<typeof createTestTenant>>;
+  let agent : Awaited<ReturnType<typeof createTestAgent>>;
+  let tool : Awaited<ReturnType<typeof createTestTool>>;
   beforeAll(async () => {
     app = await createApp();
     await app.ready();
@@ -209,9 +205,9 @@ describe("persistAuditEvent — direct, deterministic (no BullMQ involved)", () 
 describe("audit worker — through the real BullMQ queue", () => {
 
   let app: FastifyInstance;
-  let tenant: TestTenantHandle;
-  let agent: TestAgentCreationResult;
-  let tool : TestToolInterface;
+  let tenant: Awaited<ReturnType<typeof createTestTenant>>;
+  let agent: Awaited<ReturnType<typeof createTestAgent>>;
+  let tool : Awaited<ReturnType<typeof createTestTool>>;
   let worker: ReturnType<typeof createAuditWorker>;
 
   beforeAll(async () => {

@@ -8,7 +8,7 @@ describe("attachTenantContext — claim validation + tenant integrity", () => {
 
   beforeAll(async () => {
     app = await createApp();
-    tenant = await createTestTenant(app, { password: "StrongPass123!" });
+    tenant = await createTestTenant(app);
   });
 
   afterAll(async () => {
