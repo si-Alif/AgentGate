@@ -91,12 +91,22 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Converts the repository name to strictly lowercase
+      - name: Sanitize repo slug
+        uses: actions/github-script@v7
+        id: repo_slug
+        with:
+          result-encoding: string
+          script: return '${{ github.repository }}'.toLowerCase()
+
       - name: Build Docker image for pull request
         if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
           push: false
+          # Added a tag here for the PR test build using the sanitized name
+          tags: ghcr.io/${{ steps.repo_slug.outputs.result }}:pr-${{ github.event.pull_request.number }}
 
       - name: Log in to GitHub Container Registry
         if: github.ref == 'refs/heads/main'
@@ -112,4 +122,5 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          # Uses the sanitized lowercase output for the final image push
+          tags: ghcr.io/${{ steps.repo_slug.outputs.result }}:${{ github.sha }}
