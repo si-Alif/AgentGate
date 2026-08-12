@@ -1,12 +1,9 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
 
-const dbUrl =
-  process.env.AGENTGATE_DATABASE_URL ||
-  process.env.DATABASE_URL ||
-  "postgresql://placeholder:placeholder@localhost:5432/placeholder?sslmode=disable";
+const dbUrl = process.env.AGENTGATE_DATABASE_URL;
 
-if (!dbUrl && process.env.NODE_ENV === "production") {
+if (!dbUrl) {
   console.error(
     "[prisma.config] ERROR: Neither AGENTGATE_DATABASE_URL nor DATABASE_URL is set in environment."
   );
@@ -21,3 +18,4 @@ export default defineConfig({
     url: dbUrl,
   },
 });
+
