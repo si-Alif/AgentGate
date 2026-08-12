@@ -4,7 +4,7 @@ import { defineConfig } from "prisma/config";
 const dbUrl =
   process.env.AGENTGATE_DATABASE_URL ||
   process.env.DATABASE_URL ||
-  "";
+  "postgresql://placeholder:placeholder@localhost:5432/placeholder?sslmode=disable";
 
 if (!dbUrl && process.env.NODE_ENV === "production") {
   console.error(
