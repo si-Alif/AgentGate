@@ -1,711 +1,542 @@
-# AgentGate — Multi-Tenant MCP Agent Infrastructure Platform
+# AgentGate
 
-> A gateway platform that lets AI agents securely authenticate, discover, and invoke registered tools with enforced permissions, rate limits, audit logging, and real-time observability.
+**A multi-tenant gateway that stands between your AI agents and your actual infrastructure — so "just give the agent database access" doesn't have to be the plan.**
 
-**Status:** MVP in development — Milestone 3/4 complete (Permission Engine, Rate Limiter, Tool Execution Pipeline, SSRF/DNS Security)
-**Stack:** TypeScript (strict) · Fastify · PostgreSQL 16 · Redis 7 · BullMQ · Prisma
-**Protocol:** MCP (Model Context Protocol) via HTTP + SSE _(Week 6)_
+![Node.js](https://img.shields.io/badge/Node.js-22.x-339933?style=flat&logo=node.js&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat&logo=typescript&logoColor=white)
+![Fastify](https://img.shields.io/badge/Fastify-5.x-000000?style=flat&logo=fastify&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat&logo=postgresql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-ioredis-DC382D?style=flat&logo=redis&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-multi--stage-2496ED?style=flat&logo=docker&logoColor=white)
+![Status](https://img.shields.io/badge/status-live-brightgreen)
+![Build](https://img.shields.io/badge/solo--build-9%20weeks-blueviolet)
+<!-- ![License](https://img.shields.io/badge/license-MIT-informational) -->
+
+---
+
+Somewhere between *"let the agent call whatever it wants"* and *"hand-write bespoke integration glue for every agent × every system combo"* there's a gap nobody really filled. AgentGate is my attempt at filling it: a standard [MCP](https://modelcontextprotocol.io) interface that owns auth, permissions, rate limits, audit logging, and live observability, so the AI agent only ever needs to know what tools exist — not how to behave itself.
+
+Built solo, over 9 weeks, with zero shortcuts on the parts that are actually hard (tenant isolation, SSRF, chaos testing, all of it). This README is long on purpose — it's the receipts, not the vibes.
+
+**🔗 Live instance:** **[zoological-sparkle-production.up.railway.app](https://zoological-sparkle-production.up.railway.app)** — `GET /healthcheck` and go poke it.
+
+> *Free-tier Railway hosting, so give it a second to wake up if it's been idle. It's a portfolio project, not a Series B.*
+
+---
+
+## The 30-Second Version
+
+| | |
+|---|---|
+| **Build time** | 9 weeks, solo, evenings-and-weekends energy |
+| **What it actually is** | An MCP gateway — auth, permissions, rate limiting, audit trail, live dashboard, all owned by the platform, not the agent |
+| **Independent trust boundaries** | 3 — agent API key, human JWT, dashboard WebSocket ticket. None share a credential type. |
+| **Tenant-isolation surfaces independently proven** | 4 — REST, MCP/JSON-RPC, WebSocket, audit-read |
+| **Mid-build "the ground just moved" moment** | 1 — the MCP spec deprecated the transport this was designed against, days before I started building it. See below. |
+| **Times "an infra fault got mistaken for a policy decision" got caught and fixed** | 11, across 9 weeks, in 11 different subsystems |
+| **Load test that found a real bug, not just a slow number** | Yes — a silently over-permissive rate limiter, caught under real concurrency, not a unit test (§ [The Bug](#the-load-test-caught-a-real-bug)) |
+| **Gateway overhead @ p95, 50 concurrent agents** | **45ms**, against a 300ms budget |
+| **Deployed and reachable right now** | ✅ Yes |
 
 ---
 
 ## Table of Contents
 
-1. [Project Overview](#project-overview)
-2. [System Architecture](#system-architecture)
-3. [Directory Structure](#directory-structure)
-4. [Layer-by-Layer Breakdown](#layer-by-layer-breakdown)
-5. [Data Model](#data-model)
-6. [Key Design Decisions](#key-design-decisions)
-7. [Running the Project](#running-the-project)
-8. [Environment Variables](#environment-variables)
-9. [License](#license)
+- [What This Actually Solves](#what-this-actually-solves)
+- [The Origin Story](#the-origin-story-aka-the-week-the-ground-moved)
+- [Architecture at a Glance](#architecture-at-a-glance)
+- [What Happens When an Agent Calls a Tool](#what-happens-when-an-agent-calls-a-tool)
+- [Security, Seriously](#security-seriously)
+- [The Thesis: An Infra Fault Is Not a Policy Decision](#the-thesis-an-infra-fault-is-not-a-policy-decision)
+- [Multi-Tenant Isolation, Proven Not Assumed](#multi-tenant-isolation-proven-not-assumed)
+- [Measured Performance](#measured-performance)
+- [The Load Test Caught a Real Bug](#the-load-test-caught-a-real-bug)
+- [Protocol Contracts](#protocol-contracts)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Running It Locally](#running-it-locally)
+- [Take It for a Spin (curl walkthrough)](#take-it-for-a-spin-curl-walkthrough)
+- [What I Deliberately Did Not Build](#what-i-deliberately-did-not-build)
+- [The 9-Week Build Log](#the-9-week-build-log)
+- [Engineering Principles I Kept Relearning](#engineering-principles-i-kept-relearning)
+- [License](#license)
 
 ---
 
-## Project Overview
+## What This Actually Solves
 
-AgentGate sits between AI agents (Claude, GPT, open-source models) and the systems they need to interact with. It provides a controlled, observable, permissioned service layer — analogous to an API gateway but for AI agent consumption via the MCP protocol.
+Giving an AI agent direct access to internal systems — a database, an internal API, Slack, whatever — is a genuinely bad idea by default. There's no controlled surface. The agent can call anything, with any parameters, at machine speed, with zero audit trail and zero rate limiting. When something inevitably goes sideways, there's no record of what actually happened.
 
-### Core Concepts
+The obvious alternative — hand-rolling integration code per agent per system — doesn't scale either. Every new agent needs new glue. Permissions get hardcoded somewhere nobody remembers. The audit log, if it exists at all, gets bolted on in month four as an afterthought.
 
-| Concept        | Description                                                                        |
-| -------------- | ---------------------------------------------------------------------------------- |
-| **Tenant**     | An isolated company/team using the platform. Full data isolation.                  |
-| **User**       | A human administrator (authenticates via JWT). Manages agents, tools, permissions. |
-| **Agent**      | An AI agent (authenticates via API key). Invokes tools through the platform.       |
-| **Tool**       | A registered capability — HTTP call, DB query, web fetch.                          |
-| **Permission** | Declares which agent can call which tool, under what conditions.                   |
+The actual root issue: **agents aren't users.** A human logs in through a UI that structurally limits what they can even attempt. An agent authenticates programmatically and can call anything callable, as fast as the network allows. The auth/authz patterns companies already have were built for the first case. Nobody had really built the second one as real infrastructure, rather than a per-project workaround.
 
-### Current Milestone Status
-
-| Milestone | Status      | What's Built                                                                                                                |
-| --------- | ----------- | --------------------------------------------------------------------------------------------------------------------------- |
-| M1        | ✅ Complete | Multi-tenancy, Auth (register/login/refresh/logout), TenantContext middleware, email verification pipeline                  |
-| M2        | ✅ Complete | Agent CRUD + API key generation, Tool CRUD + config encryption (AES-256-GCM), schema validation                             |
-| M3        | ✅ Complete | Permission engine, Atomic Redis rate limiter, Circuit breaker, Concurrency-safe Lua scripts                                 |
-| M4        | ✅ Complete | Tool execution pipeline: HTTP handler, PostgreSQL query handler, WebFetch handler, SSRF/DNS security, timeout/abort control |
-| M5        | 🚧 Week 5   | Audit logging infrastructure (BullMQ worker, audit_events table)                                                            |
-| M6        | ⏳ Week 6   | MCP Gateway (SSE connection handler, JSON-RPC router)                                                                       |
-| M7        | ⏳ Week 7   | Real-time observability WebSocket stream                                                                                    |
-| M8        | ⏳ Week 8   | Integration testing, hardening, Docker deployment                                                                           |
-
----
-
-## System Architecture
-
-```mermaid
-graph TB
-    subgraph INGRESS["🔄 Ingress Layer"]
-        AGENT["🤖 AI Agent (Future MCP)"]
-        ADMIN["👤 Tenant Admin (Human via REST)"]
-    end
-
-    subgraph FASTIFY["🔷 Fastify Application Server"]
-        direction TB
-
-        subgraph PLUGINS["Plugins & Middleware"]
-            JWT["@fastify/jwt - JWT Sign/Verify"]
-            SENS["@fastify/sensible - HTTP Helpers"]
-            TCTX["tenant-context.plugin - request.decorate"]
-        end
-
-        subgraph HOOKS["Hooks (preHandler)"]
-            AUTH["authenticate.hook - JWT Verification"]
-            ATTACH["attach-tenant-context.hook - Extract JWT -> Context"]
-            REQACT["require-active-identity.hook - DB Re-verify"]
-        end
-
-        subgraph ROUTES["Route Handlers"]
-            HEALTH["healthcheck.ts - GET /healthcheck"]
-            REGISTER["auth/register.ts - POST /auth/register-tenant"]
-            LOGIN["auth/login.ts - POST /auth/login"]
-            REFRESH["auth/refresh.ts - POST /auth/refresh"]
-            LOGOUT["auth/logout.ts - POST /auth/logout"]
-            AGENTS["agents.ts - CRUD /api/agents"]
-            TOOLS["tools.ts - CRUD /api/tools"]
-            PERMS["permissions.ts - /api/agents/:id/permissions"]
-        end
-    end
-
-    subgraph SERVICES["🧠 Service Layer"]
-        AS["auth.service.ts - Registration, Login, Email Verify"]
-        AGS["agent.service.ts - Agent CRUD, Key Generation & Rotation"]
-        TS["tool.service.ts - Tool CRUD, Config Encryption, Schema Validation"]
-        PS["permission.service.ts - Assign, List, Revoke Permissions"]
-    end
-
-    subgraph REPOS["🗄️ Repository Layer"]
-        TR["tenant.repository.ts"]
-        UR["user.repository.ts"]
-        AR["agent.repository.ts - findByKeyId (API key lookup)"]
-        TLR["tool.repository.ts"]
-        PR["permission.repository.ts - findGrantWithContext"]
-    end
-
-    subgraph LIBS["🔧 Library / Utility Layer"]
-        PRISMA["prisma.ts - PrismaClient Singleton"]
-        REDIS["redis.ts - ioredis Singleton"]
-        RATELIMIT["rate-limiter.ts - Lua INCR + Circuit Breaker"]
-        BREAKER["circuit-breaker.ts - 3-State Circuit Breaker"]
-        PERMENG["permission-engine.ts - checkPermission()"]
-        APIKEY["api-key.ts - Generate, Hash, Verify"]
-        ENCRYPT["encryption.ts - AES-256-GCM HKDF Key Derivation"]
-        NETSAFE["network-safety.ts - SSRF Prevention (IP Ranges)"]
-        DNSEC["dns-security.ts - DNS Resolution + Validation"]
-        LOOKUP["safe-lookup.ts - net.LookupFunction Factory"]
-        SAGENT["safe-agent.ts - Undici Agent with Safe DNS"]
-        SCHEMA["schema-validator.ts - JSON Schema 3-Gate Validation"]
-        SAFETY["schema-safety.ts - Complexity & ReDoS Detection"]
-        EXEC["execute-tool.ts - Tool Dispatcher + Audit Stub"]
-        HCONFIG["handler-config.schema.ts - Zod Schemas for Handler Configs"]
-        STREAM["stream-utils.ts - Bounded Async Stream Reader"]
-        TIMEOUT["timeout.ts - AbortSignal Composition for Timeouts"]
-        CONTENT["content-utils.ts - Media Type Parsing, HTML Stripping"]
-        ERR_REDACT["error-redaction.ts - Secrets Redaction in Errors"]
-        PGS["postgres-stream.ts - Streaming PG Query with Row Guard"]
-        PGU["postgres-utils.ts - PG Target Parsing, Socket Factory"]
-        REQCTX["request-context.ts - getTenantContext() Accessors"]
-        ROLE["role.ts - Role Validation (owner/admin/member)"]
-    end
-
-    subgraph HANDLERS["⚡ Tool Execution Handlers"]
-        HTTP_H["http-handler.ts - HTTP/HTTPS via Undici"]
-        PG_H["postgres-handler.ts - Parametrized PG Queries"]
-        WEBFETCH_H["webfetch-handler.ts - Web Content Fetcher"]
-        HTYPES["types.ts - HandlerResult, Error Classes"]
-    end
-
-    subgraph QUEUE["📨 Async Queue"]
-        EQ["email.queue.ts - BullMQ Queue"]
-        EW["email.worker.ts - Email Worker (Stub)"]
-    end
-
-    subgraph DATA["💾 Data Stores"]
-        PG[("PostgreSQL 16 - System of Record")]
-        RDS[("Redis 7 - Rate Limit Counters, BullMQ Queue State")]
-    end
-
-    subgraph CONFIG["⚙️ Configuration"]
-        ENV["env.ts - Zod Schema Validation - All env vars + hex key parsing"]
-    end
-
-    subgraph TYPES["📐 Type Definitions"]
-        FT["fastify.d.ts - Module Augmentation"]
-        COM["common.ts - Shared Interfaces"]
-        DB["db-client.type.ts - DbClient Union"]
-    end
-
-    ADMIN -->|HTTPS JWT| ROUTES
-    PLUGINS --> HOOKS
-    HOOKS --> ROUTES
-    ROUTES --> SERVICES
-    SERVICES --> REPOS
-    REPOS --> LIBS
-    SERVICES --> LIBS
-    LIBS -->|Rate Limiting| RDS
-    LIBS -->|Execution| HANDLERS
-    QUEUE --> RDS
-    REPOS --> PG
-    CONFIG --> SERVICES
-    CONFIG --> LIBS
-    TYPES --> FASTIFY
+```
+AI Agent (Claude, GPT, any MCP-conformant client)
+          │  HTTPS · JSON-RPC 2.0
+          ▼
+   ┌──────────────────────┐
+   │       AgentGate      │
+   │  auth · permissions  │
+   │  rate limits · audit │
+   │  live observability  │
+   └──────────────────────┘
+          │
+          ▼
+   Registered Tools → Real Systems (DB, HTTP, webhooks…)
 ```
 
-### Core Pipeline (Request Lifecycle)
+**What this is explicitly not:** a chatbot, an LLM wrapper, a workflow-automation tool a human clicks through, or a RAG pipeline. It has no opinion about which model is calling it. It's backend infrastructure — same category as an API gateway, just built for agent-speed traffic instead of human-speed traffic.
+
+---
+
+## The Origin Story (aka the week the ground moved)
+
+A résumé line can say "built an MCP gateway." What actually happened is closer to: *"built an MCP gateway, then the protocol deprecated the transport it was designed against, mid-build, and the fix shipped inside the same week."* That's the better story, and it's true.
+
+Going into Week 6, the plan was the standard MCP transport at the time: HTTP+SSE, a Session Map, heartbeats, idle timers. Three days before that week's build started, the spec's actual current state got re-checked (not assumed — this project has a whole discipline built around not assuming, more on that below), and the ecosystem had already moved to a **stateless Streamable HTTP** model: no session concept, no `Mcp-Session-Id`, every request self-contained.
+
+The old design got fully rebuilt, inside the same week, as a single stateless `POST /mcp` endpoint. Not a downgrade — the new design is *simpler* (no session lifecycle to leak, no sticky-session requirement to scale horizontally) and *more secure* (no session token to steal or fixate; every request re-proves itself). The one thing the old design gave away for free — amortizing the ~100–300ms Argon2 verification cost across a session — got rebuilt deliberately as an **auth-accelerator cache**, which turned out to be a cleaner solution anyway.
+
+| Milestone | Week | What shipped | The thing that almost got missed |
+|---|---|---|---|
+| **M1 — Multi-tenant bedrock** | 1 | Tenants, users, JWT auth, tenant-context middleware | Fastify isn't Express — middleware-as-hooks had to be learned right the first time or every downstream week inherits the bug |
+| **M2 — Registries & crypto** | 2 | Split API keys, AES-256-GCM + per-tenant HKDF subkeys | A naive single-token key design would've needed an O(n) Argon2 sweep just to identify *which* agent — caught before it shipped |
+| **M3 — Guardrails** | 3 | Fail-closed permission engine, Redis rate limiter, circuit breaker | Two Redis clients were needed, not one — conflicting reliability requirements on the same connection |
+| **M4 — Execution pipeline** | 4 | HTTP/Postgres/WebFetch handlers, SSRF Layer 2 | Layer 1 alone doesn't stop DNS rebinding |
+| **M5 — Audit pipeline** | 5 | Idempotent dual-table writes, dead-letter queue, two redaction passes | A string-pattern redactor silently fails on JSON-quoted secrets — needed a *structural* second pass |
+| **M6 — MCP Gateway** | 6 | The gateway itself | **The spec moved out from under it. Full rebuild, same week.** |
+| **M7 — Live observability** | 7 | Ticket-authed WebSocket, tenant-scoped fan-out | A browser can't see *why* a pre-upgrade WS connection failed (spec-mandated) — every rejection has to complete the handshake first |
+| **M8 — Hardening** | 8 | Full-system chaos testing, load testing, real email + invites | A load test found a genuine correctness bug, not a slow number |
+| **W9 — Ship it** | 9 | Deploy, docs, this README | A chaos-suite failure traced to the *one* unguarded DB call an earlier fix didn't reach — the 11th instance of the pattern below |
+
+---
+
+## Architecture at a Glance
+
+Three independently-authenticated surfaces, zero shared credential types, and — the part that took actual engineering, not just endpoints — none of them can be used to reach through to another one's data.
+
+```mermaid
+graph TD
+    subgraph Clients["Three Independent Trust Boundaries"]
+        AGENT["🤖 AI Agent<br/>Bearer agk.KEYID.SECRET"]
+        HUMAN["🧑 Tenant User<br/>JWT — access + refresh"]
+        DASH["📊 Dashboard<br/>WS ticket — single-use, ~30s TTL"]
+    end
+
+    subgraph APP["AgentGate — N replicas, zero session affinity"]
+        MGMT["REST /api/*"]
+        MCP["POST /mcp<br/>stateless JSON-RPC 2.0"]
+        WSR["GET /observability/stream"]
+        HEALTH["GET /healthcheck"]
+    end
+
+    subgraph REDIS["Redis — per replica"]
+        SHARED[("shared client — BullMQ + PUBLISH")]
+        RL[("rate-limiter client — dedicated, circuit breaker")]
+        SUB[("tenant-event subscriber — duplicate()")]
+    end
+
+    subgraph PG["PostgreSQL"]
+        MAIN[("main pool — 20")]
+        AUDIT[("audit pool — 5")]
+    end
+
+    AGENT -->|"tools/list, tools/call"| MCP --> MAIN
+    HUMAN -->|"CRUD, audit-read"| MGMT --> MAIN
+    DASH -->|"ticket redemption"| WSR --> RL
+    WSR --> SUB
+    MCP -->|"non-blocking enqueue"| SHARED
+    SHARED --> AUDIT
+    SUB -.->|"live event fan-out"| DASH
+```
+
+**Why three separate auth models instead of one clever one:** agents aren't interactive — a long-lived, server-hashed API key is correct for them the same way it's correct for Stripe/GitHub/AWS keys. Users are interactive and session-bounded — JWT fits naturally. The dashboard needed a credential a *browser* could carry, and a browser's `WebSocket` constructor literally can't attach a custom `Authorization` header. Rather than invent a fourth pattern from scratch, the WS ticket reuses the exact shape already proven for refresh tokens: short-lived, single-use, server-stored, atomically redeemed. Same primitive, new context.
+
+**Why three separate Redis connections:** once a connection issues `SUBSCRIBE`, Redis restricts it to pub/sub commands only — that one's structural, not a choice. The other split (shared vs. rate-limiter) exists because BullMQ needs infinite retry on its connection and the rate limiter needs to fail *fast* — directly conflicting settings that can't live on the same client. Total: **5 connections per replica**, confirmed empirically, not just assumed.
+
+---
+
+## What Happens When an Agent Calls a Tool
+
+This is the critical path — every module built since Week 1 converges here.
 
 ```mermaid
 sequenceDiagram
-    participant Client as Admin / Agent
-    participant Fastify as Fastify App
-    participant Hooks as Auth Hooks
-    participant Route as Route Handler
-    participant Service as Service Layer
-    participant Repo as Repository
-    participant DB as PostgreSQL
-    participant Redis as Redis
+    autonumber
+    participant AG as AI Agent
+    participant GW as POST /mcp
+    participant AUTH as Identity Resolution<br/>(cache-accelerated)
+    participant PERM as Permission Engine
+    participant RL as Rate Limiter
+    participant EXEC as Tool Executor
+    participant AUD as Audit Pipeline (async)
 
-    Client->>Fastify: HTTP Request
-    Fastify->>Hooks: 1. authenticate.hook (JWT verify)
-    Hooks->>Hooks: 2. attach-tenant-context.hook (extract claims)
-    Hooks->>DB: 3. require-active-identity.hook (re-verify in DB)
-    DB-->>Hooks: active user row
-    Hooks->>Route: 4. Request with tenantContext
-    Route->>Service: 5. Business logic
-    Service->>Repo: 6. Data access
-    Repo->>DB: 7. Scoped query (WHERE tenant_id=?)
-    DB-->>Repo: result
-    Repo-->>Service: domain objects
-    Service-->>Route: response data
-    Route-->>Fastify: structured response
-    Fastify-->>Client: HTTP Response
+    AG->>GW: Bearer agk.xxx, JSON-RPC envelope
+    GW->>AUTH: resolve agent identity
+    Note over AUTH: cache hit (~30s TTL): zero DB hit<br/>cache miss: Postgres + Argon2 verify
+    GW->>PERM: checkPermission(agent, tool, tenant)
+    Note over PERM: ALWAYS fresh — never cached,<br/>even though identity is
+    alt denied
+        PERM-->>AG: -32000 PERMISSION_DENIED
+    else granted
+        GW->>GW: validate arguments (AJV, compiled + cached per tool)
+        GW->>RL: checkRateLimit(agent)
+        alt over limit
+            RL-->>AG: -32001 RATE_LIMITED
+        else within limit
+            GW->>EXEC: executeTool() — decrypt config, dispatch,<br/>SSRF re-check, timeout-bounded
+            EXEC-->>AG: JSON-RPC result
+            GW-->>AUD: enqueue (non-blocking, fire-and-forget)
+        end
+    end
 ```
+
+Two ordering decisions that look arbitrary until you think about the threat model for five seconds:
+
+- **Permission checked before schema validation.** An agent with zero grant on a tool could otherwise send garbage arguments on purpose and read the validation error back — leaking the tool's parameter shape to someone never authorized to see it via discovery either. Auth gates before anything tool-specific is revealed. No exceptions.
+- **Identity is cached; permission never is.** Argon2 is deliberately slow (100–300ms) — re-verifying it on every call would blow the entire latency budget on identity checking alone. But the whole point of a permission system is that revocation takes effect on the *next* call, not after some TTL wanders off. So identity gets a fast, cacheable front door, and permission stays a slow, always-honest wall right behind it.
 
 ---
 
-## Directory Structure
+## Security, Seriously
 
-```
-agentgate/
-│
-├── 📄 package.json              # Project manifest: dependencies, scripts, metadata
-├── 📄 tsconfig.json             # TypeScript strict-mode config
-├── 📄 vitest.config.ts          # Vitest test runner config
-├── 📄 docker-compose.yml        # PostgreSQL 16 + Redis 7 local dev stack
-├── 📄 Makefile                  # Infra commands: infra/start, db/migrate, test, dev
-├── 📄 prisma.config.ts          # Prisma configuration file
-├── 📄 HLD.md                    # High-Level Design & MVP Execution Plan
-├── 📄 PRD.md                    # Product Requirements Document
-├── 📄 PROGRESS.md               # Development progress tracking
-├── 📄 app-structure.md          # (Legacy) Application structure reference
-├── 📄 roadmap.md                # Overall roadmap
-├── 📄 roadmap_w1.md             # Week 1 roadmap
-├── 📄 roadmap_w2.md             # Week 2 roadmap
-├── 📄 roadmap_w3.md             # Week 3 roadmap
-├── 📄 roadmap_w4.md             # Week 4 roadmap
-├── 📄 roadmap_w4_d1.md          # Day 1 of Week 4
-├── 📄 roadmap_w4_d2.md          # Day 2 of Week 4
-├── 📄 roadmap_w4_d3.md          # Day 3 of Week 4
-├── 📄 roadmap_w4_d4.md          # Day 4 of Week 4
-├── 📄 roadmap_w4_d5.md          # Day 5 of Week 4
-│
-├── 📁 prisma/
-│   ├── 📄 schema.prisma          # Database schema (4 models: Tenant, User, Agent, Tool, AgentToolPermission)
-│   └── 📁 migrations/            # Prisma migration files
-│       ├── 📄 migration_lock.toml
-│       ├── 📁 20260702105237_init/              # Initial schema: tenants & users
-│       ├── 📁 20260707203949_create_refresh_token_index/
-│       ├── 📁 20260710173059_create_agent_table/
-│       ├── 📁 20260712091550_create_tools_table/
-│       └── 📁 20260717004842_create_agent_tool_permission_table/
-│
-├── 📁 src/
-│   ├── 📄 app.ts                 # 🎯 APP FACTORY — Fastify instance creation, plugin registration,
-│   │                             #     route mounting, global error handler, protected scope
-│   │
-│   ├── 📄 server.ts              # 🚀 ENTRY POINT — HTTP listen, graceful shutdown (SIGTERM/SIGINT),
-│   │                             #     closes DB/Redis/workers
-│   │
-│   ├── 📁 config/
-│   │   └── 📄 env.ts             # Zod schema — validates ALL environment variables on startup,
-│   │                             #     parses hex keys (pepper, encryption, refresh token secret)
-│   │
-│   ├── 📁 plugins/               # Fastify plugins (decorators, global middleware)
-│   │   ├── 📄 sensible.plugin.ts     # @fastify/sensible — reply.badRequest(), .notFound(), etc.
-│   │   └── 📄 tenant-context.plugin.ts  # Declares request.tenantContext decorator (null default)
-│   │
-│   ├── 📁 hooks/                 # Reusable preHandler functions (middleware chain)
-│   │   ├── 📄 authenticate.hook.ts           # Verifies JWT via request.jwtVerify()
-│   │   ├── 📄 attach-tenant-context.hook.ts  # Reads decoded JWT payload → request.tenantContext
-│   │   └── 📄 require-active-identity.hook.ts # DB re-verify: user + tenant not deleted
-│   │
-│   ├── 📁 routes/                # Route handlers (HTTP layer)
-│   │   ├── 📄 healthcheck.ts     # GET /healthcheck — public, rate-limiter health
-│   │   ├── 📄 agents.ts          # CRUD /api/agents — create, list, get, update, deactivate,
-│   │   │                         #     reactivate, rotate-key
-│   │   ├── 📄 tools.ts           # CRUD /api/tools — create, list, get, update, deactivate
-│   │   ├── 📄 permissions.ts     # /api/agents/:agentId/permissions — assign, list, revoke
-│   │   │                         #     + per-user rate limit (30 req/min)
-│   │   └── 📁 auth/
-│   │       ├── 📄 register.ts    # POST /auth/register-tenant (tenant + owner creation)
-│   │       │                     #     GET /auth/verify-email (email verification)
-│   │       ├── 📄 login.ts       # POST /auth/login (password + argon2 + JWT)
-│   │       ├── 📄 refresh.ts     # POST /auth/refresh (HMAC refresh token → new access token)
-│   │       └── 📄 logout.ts      # POST /auth/logout (invalidate refresh token hash)
-│   │
-│   ├── 📁 services/              # Business logic layer (no HTTP, no direct DB access)
-│   │   ├── 📄 auth.service.ts    # registerTenant, verifyEmail, login, refresh, logout
-│   │   ├── 📄 agent.service.ts   # createAgent (API key gen), list, get, update, deactivate,
-│   │   │                         #     reactivate, rotateKey
-│   │   ├── 📄 tool.service.ts    # createTool (schema validation + config encryption),
-│   │   │                         #     list, get, getDecryptedConfig, update, deactivate
-│   │   └── 📄 permission.service.ts # assignPermission, listPermissions, revokePermission
-│   │
-│   ├── 📁 repositories/          # Data access layer (ALL queries tenant-scoped)
-│   │   ├── 📄 tenant.repository.ts   # findById, findBySlug, create
-│   │   ├── 📄 user.repository.ts     # findByEmail, findById, findByRefreshTokenHash, etc.
-│   │   ├── 📄 agent.repository.ts    # create, findById, findByKeyId, list, updateProfile, etc.
-│   │   ├── 📄 tool.repository.ts     # create, findById, list, updateProfile, setActiveStatus
-│   │   └── 📄 permission.repository.ts # create, listByAgentId, deactivate, findGrantWithContext
-│   │
-│   ├── 📁 handlers/              # Tool execution handlers
-│   │   ├── 📄 types.ts           # HandlerResult, ExecutionResult, error classes, constants
-│   │   ├── 📄 http-handler.ts    # HTTP/HTTPS tool execution via undici (SSRF-safe)
-│   │   ├── 📄 postgres-handler.ts # PostgreSQL query execution (streaming, SSRF-safe)
-│   │   └── 📄 webfetch-handler.ts # Web content fetcher (HTML, JSON, plain text)
-│   │
-│   ├── 📁 lib/                   # Stateless utilities (zero Fastify dependency)
-│   │   ├── 📄 prisma.ts          # PrismaClient singleton (PgAdapter, connection pool)
-│   │   ├── 📄 redis.ts           # ioredis singleton (BullMQ-compatible config)
-│   │   ├── 📄 api-key.ts         # generateApiKey (prefix+keyId+secret), parseApiKey,
-│   │   │                         #     hashApiKeySecret (argon2), verifyApiKeySecret
-│   │   ├── 📄 encryption.ts      # AES-256-GCM encryptConfig/decryptConfig
-│   │   │                         #     HKDF key derivation per tenant
-│   │   ├── 📄 rate-limiter.ts    # Dedicated Redis client + Lua script (rateLimitIncr),
-│   │   │                         #     CircuitBreaker, checkRateLimit(), checkRateLimitByKey()
-│   │   ├── 📄 circuit-breaker.ts # CircuitBreaker class — CLOSED → OPEN → HALF_OPEN
-│   │   ├── 📄 permission-engine.ts # checkPermission() — pure DB query + status cascading
-│   │   ├── 📄 request-context.ts # getTenantContext() + getActiveUser() — typed accessors
-│   │   ├── 📄 handler-config.schema.ts # Zod schemas: http, postgres, webFetch handler configs
-│   │   ├── 📄 network-safety.ts  # Hostname/IP safety checks — SSRF prevention
-│   │   ├── 📄 dns-security.ts    # DNS resolution (resolve4/resolve6) + IP validation
-│   │   ├── 📄 safe-lookup.ts     # net.LookupFunction factory with DNS security
-│   │   ├── 📄 safe-agent.ts      # Shared undici Agent with safe DNS lookup
-│   │   ├── 📄 schema-validator.ts # JSON Schema validation via AJV (3 gates)
-│   │   ├── 📄 schema-safety.ts   # Schema complexity limits, regex ReDoS scanning
-│   │   ├── 📄 execute-tool.ts    # Tool dispatcher — routes to handler, audit stub
-│   │   ├── 📄 audit-stub.ts      # Fire-and-forget audit stub (console.log, Week 5 placeholder)
-│   │   ├── 📄 stream-utils.ts    # Bounded async stream reader (10MB ceiling)
-│   │   ├── 📄 timeout.ts         # AbortSignal composition for tool execution timeouts
-│   │   ├── 📄 content-utils.ts   # Media type parsing, HTML stripping, text extraction
-│   │   ├── 📄 error-redaction.ts # Secrets redaction in error messages
-│   │   ├── 📄 postgres-stream.ts # Streaming PG query execution with row/byte limits
-│   │   ├── 📄 postgres-utils.ts  # PG URL parsing, safe socket factory, force terminate
-│   │   └── 📄 role.ts            # VALID_ROLES constant + assertValidRole() helper
-│   │
-│   ├── 📁 queue/                 # BullMQ queue definitions
-│   │   └── 📄 email.queue.ts     # "email" Queue — verification emails (typed jobs)
-│   │
-│   ├── 📁 workers/               # BullMQ background workers
-│   │   └── 📄 email.worker.ts    # Email worker (stub — logs to console, SMTP in Phase 2)
-│   │
-│   ├── 📁 types/                 # TypeScript type definitions
-│   │   ├── 📄 fastify.d.ts       # Module augmentation: request.tenantContext, JWT payload
-│   │   ├── 📄 common.ts          # ExecutionResult, PaginationParams, DateRangeFilter
-│   │   └── 📄 db-client.type.ts  # DbClient = PrismaClient | Prisma.TransactionClient
-│   │
-│   └── 📁 __tests__/             # Test suite (Vitest) — 46+ test files
-│       ├── 📁 helpers/
-│       │   ├── 📄 setup.ts       # Global afterEach DB cleanup, test setup
-│       │   └── 📄 test-tenant.factory.ts # Tenant+user creation helper
-│       │
-│       ├── 📄 health.test.ts                   # Health check endpoint
-│       ├── 📄 database.test.ts                 # DB connectivity
-│       ├── 📄 auth.register.test.ts            # Registration flow
-│       ├── 📄 auth.register-edge-cases.test.ts # Registration edge cases (P2002, slugs)
-│       ├── 📄 auth.session.test.ts             # Session management
-│       ├── 📄 auth.e2e.test.ts                 # Auth end-to-end lifecycle
-│       ├── 📄 attach-tenant-context.test.ts    # Tenant context middleware
-│       ├── 📄 tenant-isolation.test.ts         # Tenant data isolation proofs
-│       ├── 📄 encryption.test.ts               # AES-256-GCM roundtrip
-│       ├── 📄 api-key.test.ts                  # API key generation/verification
-│       ├── 📄 agents.test.ts                   # Agent CRUD
-│       ├── 📄 tools.route.test.ts              # Tool CRUD routes
-│       ├── 📄 agent_tool.integration.test.ts   # Agent-tool integration
-│       ├── 📄 schema-safety.test.ts            # Schema safety checks
-│       ├── 📄 network-safety.test.ts           # SSRF prevention tests
-│       ├── 📄 dns-security.test.ts             # DNS resolution safety
-│       ├── 📄 handler-config.schema.test.ts    # Handler config validation
-│       ├── 📄 permission-engine.test.ts        # Permission engine unit tests
-│       ├── 📄 permission.repository.test.ts    # Permission repository
-│       ├── 📄 permission.service.test.ts       # Permission service
-│       ├── 📄 permissions.e2e.test.ts          # Permissions end-to-end
-│       ├── 📄 permission-latency.test.ts       # Permission check latency
-│       ├── 📄 circuit-breaker.test.ts          # Circuit breaker states
-│       ├── 📄 rate-limiter.atomicity.test.ts   # Redis atomicity proofs
-│       ├── 📄 rate-limit-concurrency.test.ts   # Concurrent rate limit proofs
-│       ├── 📄 rate-limit-latency.test.ts       # Rate limit latency
-│       ├── 📄 rate-limit-tenant-scope.test.ts  # Tenant-scoped rate limiting
-│       ├── 📄 rate-limit-decision.test.ts      # Rate limit decision logic
-│       ├── 📄 rate-limiter-health.test.ts      # Rate limiter health check
-│       ├── 📄 rate-limit-breaker.integration.test.ts # Rate limiter + breaker
-│       ├── 📄 http-handler.test.ts             # HTTP handler
-│       ├── 📄 postgres-handler.test.ts         # Postgres handler
-│       ├── 📄 postgres-stream.test.ts          # Postgres streaming
-│       ├── 📄 postgres-utils.test.ts           # Postgres utilities
-│       ├── 📄 webfetch-handler.test.ts         # WebFetch handler
-│       ├── 📄 execute-tool.test.ts             # Tool execution dispatcher
-│       ├── 📄 content-utils.test.ts            # Content utilities
-│       ├── 📄 stream-utils.test.ts             # Stream utilities
-│       ├── 📄 timeout.test.ts                  # Timeout composition
-│       ├── 📄 error-redaction.test.ts          # Error redaction
-│       ├── 📄 schema-safety.test.ts            # Schema safety
-│       ├── 📄 week3-checkpoint.test.ts         # Week 3 integration checkpoint
-│       └── 📄 ... (more M4-specific tests)
-│
-├── 📄 .gitignore
-├── 📄 .env                         # (Not committed — local env vars)
-└── 📄 .env.example                 # (Committed — all keys with placeholder values)
-```
+### SSRF — two independent layers, not one
 
----
-
-## Layer-by-Layer Breakdown
-
-### 1. Application Core (`src/app.ts` + `src/server.ts`)
-
-| File        | Purpose                                                                                                                                                                                                                                                                                                                  |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `app.ts`    | Creates and configures the Fastify instance. Registers plugins (sensible, JWT, tenant-context). Mounts routes in order: public (health, auth) → protected (agents, tools, permissions). Sets up global error handler (hides 500 internals, passes through 4xx). Defines proof endpoints `/api/me` and `/api/me/details`. |
-| `server.ts` | Entry point. Calls `createApp()`, initializes email worker, sets up graceful shutdown (SIGTERM/SIGINT). Shutdown order: app → email worker → email queue → rate limiter Redis → main Redis → Prisma.                                                                                                                     |
-
-### 2. Configuration (`src/config/env.ts`)
-
-Validates all environment variables using Zod on startup. **Parses** hex-encoded binary keys into `Buffer` objects:
-
-- `AGENTGATE_PASSWORD_PEPPER` — Argon2 password pepper (32 bytes)
-- `AGENTGATE_API_KEY_PEPPER` — Argon2 API key pepper (32 bytes)
-- `AGENTGATE_PLATFORM_ENCRYPTION_KEY` — AES-256-GCM key (32 bytes)
-- `AGENTGATE_REFRESH_TOKEN_SECRET` — HMAC key for refresh tokens (32 bytes)
-
-### 3. Plugins Layer (`src/plugins/`)
-
-| Plugin                     | What it does                                                                                                                                      |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sensible.plugin.ts`       | Registers `@fastify/sensible` — HTTP helper methods (`reply.badRequest()`, `reply.notFound()`, `reply.unauthorized()`, `reply.conflict()`, etc.)  |
-| `tenant-context.plugin.ts` | Decorates `FastifyRequest` with `tenantContext: null` and `activeUser: null`. Must be registered before hooks/routes can access these properties. |
-
-### 4. Hooks Layer (`src/hooks/`)
-
-Applied as `preHandler` on the protected route scope. Runs in order:
-
-1. **`authenticate.hook.ts`** — Calls `request.jwtVerify()`. Returns 401 if token is invalid/expired.
-2. **`attach-tenant-context.hook.ts`** — Reads decoded JWT payload, validates role (owner/admin/member whitelist), writes `request.tenantContext = { tenantId, userId, role }`.
-3. **`require-active-identity.hook.ts`** — Queries PostgreSQL to ensure user and tenant are not soft-deleted. Caches result as `request.activeUser`.
-
-### 5. Route Handlers (`src/routes/`)
-
-| Route File         | HTTP Endpoints                                                                                                                     | Auth                               |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `healthcheck.ts`   | `GET /healthcheck`                                                                                                                 | Public                             |
-| `auth/register.ts` | `POST /auth/register-tenant`, `GET /auth/verify-email`                                                                             | Public                             |
-| `auth/login.ts`    | `POST /auth/login`                                                                                                                 | Public                             |
-| `auth/refresh.ts`  | `POST /auth/refresh`                                                                                                               | Public                             |
-| `auth/logout.ts`   | `POST /auth/logout`                                                                                                                | Public                             |
-| `agents.ts`        | `POST/GET /api/agents`, `GET/PATCH/DELETE /api/agents/:id`, `POST /api/agents/:id/reactivate`, `POST /api/agents/:id/rotate-key`   | JWT                                |
-| `tools.ts`         | `POST/GET /api/tools`, `GET/PATCH/DELETE /api/tools/:id`                                                                           | JWT                                |
-| `permissions.ts`   | `POST /api/agents/:agentId/permissions`, `GET /api/agents/:agentId/permissions`, `DELETE /api/agents/:agentId/permissions/:toolId` | JWT + per-user rate limit (30/min) |
-
-### 6. Service Layer (`src/services/`)
-
-| Service                 | Responsibilities                                                                                                                                                                                                                      |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth.service.ts`       | Tenant + user registration (transactional), password hashing (argon2 with pepper), email verification token management, login (timing-safe comparison), JWT access token generation, refresh token rotation (HMAC + DB hash), logout. |
-| `agent.service.ts`      | Agent CRUD, API key generation (argon2-hashed, returned once), key rotation, activation/deactivation/reactivation.                                                                                                                    |
-| `tool.service.ts`       | Tool CRUD with input schema validation (AJV + safety gates), handler config encryption (AES-256-GCM), handler config decryption for execution.                                                                                        |
-| `permission.service.ts` | Assign permission (validates agent+tool exist in tenant), list paginated permissions, revoke (soft-deactivate).                                                                                                                       |
-
-### 7. Repository Layer (`src/repositories/`)
-
-Every repository function accepts an optional `client` parameter (defaulting to the singleton `prisma`), enabling transaction participation. **All queries are tenant-scoped** via `WHERE tenantId = ?`.
-
-Key functions:
-
-- **`agent.repository.findByKeyId(apiKeyId)`** — The ONE lookup without tenantId. Used during MCP SSE connection where tenant is unknown until agent is resolved.
-- **`permission.repository.findGrantWithContext()`** — Hot-path lookup for permission checks. Returns agent.isActive, tool.isActive, tenant.deletedAt in a single query.
-
-### 8. Library Layer (`src/lib/`)
-
-Stateless utilities, zero Fastify dependency, independently testable:
-
-| Library                    | What It Does                                                                                                                                                                                                                       |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `prisma.ts`                | PrismaClient singleton with `@prisma/adapter-pg` connection pool. Cached on `globalThis` in non-production.                                                                                                                        |
-| `redis.ts`                 | ioredis singleton configured for BullMQ (`maxRetriesPerRequest: null`). Reconnect with backoff.                                                                                                                                    |
-| `rate-limiter.ts`          | **Dedicated Redis client** for rate limiting (short timeouts, limited retries). Custom `rateLimitIncr` Lua command (INCR + EXPIRE in one atomic op). `checkRateLimit()` + `checkRateLimitByKey()`. Integrated with CircuitBreaker. |
-| `circuit-breaker.ts`       | Three-state circuit breaker: CLOSED → OPEN (on 3 failures) → HALF_OPEN (after 15s cooldown, single probe attempt). Used by the rate limiter.                                                                                       |
-| `api-key.ts`               | API key format: `agk.<12-byte-keyId-hex>.<32-byte-secret-hex>`. Generate, parse, hash (argon2 with pepper), verify.                                                                                                                |
-| `encryption.ts`            | AES-256-GCM encryption/decryption of tool handler configs. Tenant-specific key derivation via HKDF. Output format: `iv:ciphertext:authTag` (base64 segments).                                                                      |
-| `permission-engine.ts`     | Pure `checkPermission()` function. Queries `findGrantWithContext()` and cascades through: tenant deleted? → permission inactive? → agent inactive? → tool inactive?                                                                |
-| `network-safety.ts`        | SSRF prevention. Blocks private IP ranges, localhost, metadata endpoints. Validates HTTP URLs and PostgreSQL connection strings.                                                                                                   |
-| `dns-security.ts`          | DNS resolution using `resolve4()`/`resolve6()` (not `dns.lookup()`, which shares libuv threadpool with argon2). Resolves and validates ALL candidate IPs before allowing connection.                                               |
-| `safe-lookup.ts`           | Creates a `net.LookupFunction` that uses `dns-security.ts` for validation, usable as `lookup` option in `net.connect()` or undici's `Agent`.                                                                                       |
-| `safe-agent.ts`            | Shared undici `Agent` instance with SSRF-safe DNS lookup. Single instance reused across all HTTP/WebFetch handlers.                                                                                                                |
-| `handler-config.schema.ts` | Zod discriminated union schemas for `http`, `postgres`, and `web_fetch` handlers. SSRF-safe URL validation via `network-safety.ts`.                                                                                                |
-| `schema-validator.ts`      | Three-gate JSON Schema validation: structural (AJV) → complexity (size/depth) → pattern safety (ReDoS detection).                                                                                                                  |
-| `schema-safety.ts`         | `checkSchemaComplexity()` — max 20KB serialized, max depth 20. `scanForUnsafeRegexPatterns()` — max pattern length 200, safe-regex validation.                                                                                     |
-| `execute-tool.ts`          | Tool dispatcher: reads tool from DB, decrypts config, validates with Zod, routes to appropriate handler. Wraps execution in `withTimeout()`. Produces audit events via stub.                                                       |
-| `audit-stub.ts`            | Fire-and-forget audit stub (logs to console). Week 5 replaces this with BullMQ enqueue without changing the interface.                                                                                                             |
-| `stream-utils.ts`          | `readBoundedStream()` — reads an async byte stream up to a max byte limit, throws `PayloadTooLargeError` on overflow.                                                                                                              |
-| `timeout.ts`               | `withTimeout()` — composes an AbortSignal from a timeout duration and optional external signal, races the handler against it.                                                                                                      |
-| `content-utils.ts`         | `parseMediaType()`, `assertSupportedMediaType()`, `stripHtml()`, `extractReadableText()` — parses and extracts text from web responses.                                                                                            |
-| `error-redaction.ts`       | `redactSecrets()` — strips URL credentials, Bearer tokens, and API key patterns from error messages before returning to callers.                                                                                                   |
-| `postgres-stream.ts`       | `executePostgresStreamingQuery()` — uses `pg-query-stream` for row-by-row iteration with `MAX_POSTGRES_ROWS` (1,000) and `MAX_POSTGRES_PAYLOAD_BYTES` (10MB) guards.                                                               |
-| `postgres-utils.ts`        | `parsePostgresUrl()`, `createSafePostgresStreamFactory()`, `forceTerminateClient()`, `redactConnectionString()`.                                                                                                                   |
-| `request-context.ts`       | `getTenantContext(request)` and `getActiveUser(request)` — typed accessors that throw if hook ordering is violated.                                                                                                                |
-| `role.ts`                  | `VALID_ROLES = ["owner", "admin", "member"]`. `assertValidRole()` for JWT payload hardening.                                                                                                                                       |
-
-### 9. Handler Layer (`src/handlers/`)
-
-| Handler                | File                  | Description                                                                                                                                                                                                                                                                                                                                                                           |
-| ---------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HTTP Handler**       | `http-handler.ts`     | Executes HTTP requests via undici with SSRF-safe DNS. Interpolates body templates with `{{param}}` syntax. Enforces 10MB response ceiling. Returns `{ statusCode, headers, body }`.                                                                                                                                                                                                   |
-| **PostgreSQL Handler** | `postgres-handler.ts` | Opens a dedicated pg.Client (per-execution, no pooling). Uses streaming query with row/byte limits. SSRF-safe DNS validation. Connection-level timeout via `forceTerminateClient()`.                                                                                                                                                                                                  |
-| **WebFetch Handler**   | `webfetch-handler.ts` | GET-only web content fetcher. Strips HTML to text. Enforces media type whitelist (HTML, XHTML, plain text, JSON). 2MB ceiling.                                                                                                                                                                                                                                                        |
-| **Types**              | `types.ts`            | `HandlerResult`, `ExecutionResult`, `HandlerStatus`, `ToolExecutionErrorCode`. Error classes: `TimeoutError`, `PayloadTooLargeError`, `SsrfBlockedError`, `UnsupportedMediaTypeError`, `RowLimitExceededError`, `ByteLimitExceededError`. Constants: `MAX_PAYLOAD_BYTES`, `MAX_WEBFETCH_BYTES`, `MAX_POSTGRES_ROWS`, `DEFAULT_TIMEOUT_MS`, `DNS_TIMEOUT_MS`, `CONNECTION_TIMEOUT_MS`. |
-
-### 10. Queue & Workers (`src/queue/` + `src/workers/`)
-
-| File              | Purpose                                                                                   |
-| ----------------- | ----------------------------------------------------------------------------------------- |
-| `email.queue.ts`  | BullMQ `email` Queue. Job type: `{ type: "verification", email: string, token: string }`. |
-| `email.worker.ts` | Email worker (currently a stub that logs to console). Real SMTP/SendGrid in Phase 2.      |
-
-### 11. Type Definitions (`src/types/`)
-
-| File                | Contents                                                                                                              |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `fastify.d.ts`      | Module augmentation for Fastify: `request.tenantContext`, `request.activeUser`, `FastifyInstance`, JWT payload shape. |
-| `common.ts`         | `ExecutionResult`, `PaginationParams`, `DateRangeFilter` interfaces.                                                  |
-| `db-client.type.ts` | `DbClient = PrismaClient                                                                                              | Prisma.TransactionClient` — enables both singleton and transactional usage in repositories. |
-
-### 12. Test Suite (`src/__tests__/`)
-
-46+ test files covering the entire codebase with unit, integration, and end-to-end tests:
-
-| Category           | Files                                                                                                                                               | What's Tested                                                                          |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| **Health**         | `health.test.ts`, `database.test.ts`                                                                                                                | Server responds, DB connects                                                           |
-| **Auth**           | 5 files                                                                                                                                             | Registration, edge cases, sessions, E2E flow                                           |
-| **Multi-tenancy**  | `tenant-isolation.test.ts`, `attach-tenant-context.test.ts`                                                                                         | Strict data isolation                                                                  |
-| **Security**       | `encryption.test.ts`, `api-key.test.ts`, `schema-safety.test.ts`, `network-safety.test.ts`, `dns-security.test.ts`, `handler-config.schema.test.ts` | Crypto roundtrip, key verification, SSRF prevention, ReDoS                             |
-| **Agents & Tools** | `agents.test.ts`, `tools.route.test.ts`, `agent_tool.integration.test.ts`                                                                           | CRUD operations                                                                        |
-| **Permissions**    | 4 files                                                                                                                                             | Engine, repository, service, E2E, latency                                              |
-| **Rate Limiting**  | 5+ files                                                                                                                                            | Atomicity, concurrency, latency, circuit-breaker, tenant-scope, decision logic, health |
-| **Handlers**       | 4+ files                                                                                                                                            | HTTP, Postgres, WebFetch, stream utilities                                             |
-| **Execution**      | `execute-tool.test.ts`, `timeout.test.ts`, `content-utils.test.ts`, `stream-utils.test.ts`, `error-redaction.test.ts`                               | Dispatcher, timeout, content parsing, streams, error redaction                         |
-| **Integration**    | `week3-checkpoint.test.ts`                                                                                                                          | Week 3 integration checkpoint                                                          |
-
----
-
-## Data Model
+A tool that fetches a URL, queries a database, or hits a webhook is configured by the *tenant* — meaning the target is untrusted input pointed at real infrastructure. One check isn't enough, because a hostname can look perfectly safe at tool-creation time and resolve somewhere unsafe by the time it's actually called (DNS rebinding is a real attack shape, not a theoretical one).
 
 ```mermaid
-erDiagram
-    Tenant ||--o{ User : "has"
-    Tenant ||--o{ Agent : "has"
-    Tenant ||--o{ Tool : "has"
-    Tenant ||--o{ AgentToolPermission : "has"
-    Agent ||--o{ AgentToolPermission : "has"
-    Tool ||--o{ AgentToolPermission : "has"
-
-    Tenant {
-        string id PK
-        string name
-        string slug UK
-        string plan
-        json settings
-        datetime created_at
-        datetime updated_at
-        datetime deleted_at
-    }
-
-    User {
-        string id PK
-        string tenant_id FK
-        string email UK
-        string password_hash
-        string role
-        boolean is_verified
-        string verification_token
-        string refresh_token_hash
-        datetime created_at
-        datetime updated_at
-        datetime deleted_at
-    }
-
-    Agent {
-        string id PK
-        string tenant_id FK
-        string name
-        string description
-        string api_key_id UK
-        string api_key_hash
-        boolean is_active
-        string created_by
-        datetime created_at
-        datetime updated_at
-        datetime last_active_at
-    }
-
-    Tool {
-        string id PK
-        string tenant_id FK
-        string name
-        string description
-        string category
-        string handler_type
-        string handler_config "AES-256-GCM encrypted"
-        json input_schema
-        json output_schema
-        boolean is_active
-        datetime created_at
-        datetime updated_at
-    }
-
-    AgentToolPermission {
-        string id PK
-        string tenant_id FK
-        string agent_id FK
-        string tool_id FK
-        boolean is_active
-        json parameter_constraints "Phase 2 stub"
-        int call_budget_per_hour "Phase 2 stub"
-        datetime created_at
-        datetime updated_at
-    }
+flowchart LR
+    A["Tool config submitted<br/>(tenant-authored)"] --> B["LAYER 1 — creation time<br/>string pre-filter: scheme allow-list,<br/>literal-IP range classification"]
+    B -->|"accepted, stored"| C["Tool invoked later"]
+    C --> D["LAYER 2 — call time<br/>DNS resolved FRESH,<br/>every candidate IP validated,<br/>connect only to validated address"]
+    D -->|"blocked"| E["-32008 SSRF_BLOCKED"]
+    D -->|"safe"| F["Request proceeds"]
 ```
 
-### Key Schema Decisions
+Layer 1 catches the obvious stuff cheaply at write time — literal loopback, cloud metadata IPs, private ranges, including decimal/hex/octal-obfuscated encodings of the same. Layer 2 is the actual boundary: DNS gets re-resolved at the *moment of the call*, every returned candidate address gets validated (a mixed response with one safe and one unsafe IP fails the whole set closed), and the connection goes straight to the validated address — nothing downstream ever gets to re-resolve the hostname and reopen the window.
 
-- **Soft deletes** on Tenant and User (`deletedAt`) — agents and tools are deactivated (`isActive = false`), never deleted.
-- **`@@unique([tenantId, name])`** on Agent and Tool — names are unique within a tenant but can repeat across tenants.
-- **`@@unique([agentId, toolId])`** on AgentToolPermission — one permission row per agent-tool pair.
-- **Indexes** on `tenantId` for every tenant-scoped table, plus `refreshTokenHash` and `verificationToken` on users.
-- **Handler config** is encrypted at rest with AES-256-GCM using a tenant-specific key (HKDF-derived from the platform master key).
+### Credential handling
 
----
+| Credential | Storage | Notes |
+|---|---|---|
+| User password | Argon2 hash | Deliberately expensive (100–300ms), paid once at login |
+| Agent API key secret | Argon2 hash, indexed lookup via public `keyId` | Split `agk.<keyId>.<secret>` specifically because Argon2 hashes can't be looked up by value |
+| Refresh token | Hashed, single-use rotation | Never logged, never re-shown |
+| Invitation token | HMAC-SHA256 | Argon2 was rejected here — its random per-hash salt structurally can't serve a "find the row this token belongs to" query |
+| WS ticket | Redis key, atomic `GETDEL` | Scrubbed from structured logs by a dedicated serializer — same discipline as every other secret |
 
-## Key Design Decisions
+### Encryption at rest
 
-### Architecture
+Tool `handler_config` (connection strings, API keys, webhook secrets) is AES-256-GCM encrypted — but not under one flat platform-wide key. Each tenant's data is encrypted under a **subkey derived via HKDF** from the master key plus the tenant ID. Priced honestly: it's not a boundary against a *compromised master key* (tenant IDs aren't secret), but it does mean a leak scoped to one request or one tenant's key material doesn't drag every other tenant's secrets down with it.
 
-- **Single Fastify process** — The in-memory session map (required by MCP's split HTTP channels: GET /sse + POST /message) cannot be serialized across processes. Horizontal scaling requires sticky sessions (Phase 2).
-- **Two Redis clients** — Main Redis (for BullMQ, configured with `maxRetriesPerRequest: null`) and a separate rate-limiter Redis client (short timeouts, limited retries, command timeout). This prevents rate-limiting operations from being blocked by BullMQ's indefinite retry policy.
-- **Layer isolation** — Routes → Services → Repositories → Prisma. Services know nothing about HTTP. Repositories accept optional transaction clients.
+### Public-surface abuse resistance
 
-### Security
-
-- **API keys**: Format `agk.<96-bit-keyId>.<256-bit-secret>`. KeyId is public (in the token), secret is argon2-hashed with a pepper. Raw secret returned once at creation, never stored.
-- **Encryption at rest**: Tool handler configs (which may contain DB connection strings, API keys) encrypted with AES-256-GCM. Tenant-specific key derived via HKDF from a platform master key.
-- **SSRF prevention**: Two-layer defense. Layer 1 — URL/connection string safety checks at tool creation time (block private IP ranges, localhost, metadata endpoints). Layer 2 — DNS resolution and IP validation at execution time, using `resolve4()`/`resolve6()` (not `dns.lookup()` to avoid threadpool contention with argon2).
-- **Schema safety**: Three-gate validation on tool input schemas — structural (AJV), complexity (20KB max, depth 20), and ReDoS pattern scanning (safe-regex library).
-
-### Rate Limiting
-
-- **Atomic Lua script**: `INCR key` + `EXPIRE key 120` in one Redis eval call. Key pattern: `rate:agent:<agentId>:min:<epochMinute>`.
-- **Circuit breaker**: Integrated with the rate limiter. After 3 Redis failures, the circuit opens for 15 seconds, then allows a single probe. On continued failure, stays open; on success, resets.
-- **Degradation modes**: If Redis is down but the circuit hasn't tripped (below 3 failures), the rate limiter fails **open** (allows requests). If the circuit is OPEN, it fails **closed** (denies requests). Both paths set `degraded: true`.
-
-### Tenant Isolation
-
-Enforced at three layers:
-
-1. **JWT** — The token contains `tenantId`. Middleware extracts it into `request.tenantContext`.
-2. **Hook** — `require-active-identity.hook` re-verifies user+tenant are active via DB.
-3. **Repository** — Every query includes `WHERE tenant_id = ?`.
+Every endpoint reachable **before** a credential exists — tenant registration, login, invitation acceptance, the MCP pre-auth path, WebSocket connect attempts — carries its own independently-bucketed, IP-keyed rate throttle, all built on one proven Redis primitive instead of a bespoke mechanism per surface.
 
 ---
 
-## Running the Project
+## The Thesis: An Infra Fault Is Not a Policy Decision
 
-### Prerequisites
+If this project has one idea running through all nine weeks of it, this is it.
 
-- Node.js >= 22
-- Docker (for PostgreSQL + Redis)
-- Docker Compose
+A rate limit being hit, a permission being denied, and a database connection dropping mid-query are *completely different things*. Conflating any two of them is a real bug, not a cosmetic one. If a Redis blip gets reported to a client as "you're rate-limited," or a severed Postgres connection gets reported as "your tool's config is broken," the client draws exactly the wrong conclusion and takes exactly the wrong corrective action.
 
-### Quick Start
+This distinction got drawn, independently, **11 times**, in 11 different subsystems, across 9 weeks. That's either a sign of a project with a real architectural spine, or a sign that the same near-miss kept almost happening. Both are true, and honestly, that's kind of the point.
+
+| # | Subsystem | The fault | The correct outcome |
+|---|---|---|---|
+| 1 | Permission engine | Postgres error during a grant lookup | Distinct `reason: "error"`, never confused with a real denial |
+| 2 | Rate limiter | Circuit breaker open / Redis unreachable | `degraded: true`, distinct from an actual limit hit |
+| 3 | MCP error mapping | Formalized #1 and #2 into wire-level codes | `-32002 SERVICE_DEGRADED` vs. `-32001` / `-32000` |
+| 4 | Audit layer | A degraded rate-limit result | Never written to the audit trail as a real policy denial |
+| 5 | Ticket issuance | Redis write failure right after a passed rate check | Real `503`, never a fabricated `200` with a dead ticket |
+| 6 | Ticket redemption | `GETDEL` throwing vs. legitimately returning nil | A distinct close code, never conflated with "ticket doesn't exist" |
+| 7 | Audit-read throttle | A shipped bug where the result was never even checked | Fixed to actually branch: `503` vs `429` |
+| 8 | Public-auth throttle | Same split, applied pre-credential | `503` vs `429` — no audit row, since no tenant scope exists yet |
+| 9 | Load-test tallying | The test's own measurement needed the same rigor | Three-bucket tally, never collapsed into two |
+| 10 | Tool executor | Postgres fault during its own defense-in-depth re-lookup | New `INFRA_UNAVAILABLE` code → `-32002` |
+| 11 | Identity resolution | The one unguarded DB call an earlier fix didn't reach | Same pattern, applied one layer earlier — found by a real chaos test, not a code review |
+
+### The hybrid circuit breaker
+
+Rate-limit checks specifically need a **bounded fail-open, then fail-closed** posture — not the always-fail-closed posture the permission engine uses — because a rate limit is a *policy*, not an identity check, and a total outage should degrade throughput protection gracefully instead of taking the whole gateway down with it.
+
+- **CLOSED** (healthy) — normal atomic checking.
+- **OPEN** (tripped, 3 consecutive failures) — fails closed immediately, doesn't even attempt Redis, for a cooldown window.
+- **HALF_OPEN** (probing) — one call let through after cooldown; success resets to CLOSED, failure re-trips OPEN.
+
+Two known imprecisions here are **documented exactly**, not glossed over: the fail-open window is bounded by *time*, not exact call count (concurrency makes "the first N calls" an undefined concept), and concurrent `HALF_OPEN` probes resolve last-writer-wins. Stating a real limitation precisely beats implying a stronger guarantee that doesn't actually hold.
+
+---
+
+## Multi-Tenant Isolation, Proven Not Assumed
+
+Isolation isn't one mechanism wearing four hats — it's proven **independently** at four separate surfaces, because a leak at any one of them is a real incident regardless of how airtight the other three are.
+
+| Surface | Enforcement | What it actually prevents |
+|---|---|---|
+| **REST** | `TenantContext` middleware injects `{tenantId, userId, role}` from the verified JWT; every query filters on it | A request body/param can't override which tenant's data gets touched |
+| **MCP (JSON-RPC)** | Tool-name → ID resolution is `(name, tenantId)`-scoped; permission re-verifies tenant status fresh, every call | Cross-tenant tool-name guessing can't resolve to another tenant's tool |
+| **WebSocket** | Live events fan out only to sockets registered under the *server-resolved* tenant ID — never a client-supplied field | A guessed or stolen channel name can't be joined; delivery is registry-driven, not request-driven |
+| **Audit-read** | Every read filters `tenantId` on *both* sides of any join — never trusts a shared primary key alone | A known, valid event ID under the wrong tenant returns nothing. Not even a 403 that confirms it exists. |
+
+The one thing this project treats as genuinely load-bearing rather than nice-to-have: `checkPermission()` re-derives tenant scope from the database on **every single call**, with zero caching, specifically so a revoked permission or a suspended tenant takes effect on the very next request. Proven adversarially, too — a full cross-surface attack matrix pivots one attacker's real credentials across REST, MCP, and WebSocket simultaneously (via genuine `Promise.all` concurrency, not a sequential loop) and confirms zero leakage either way.
+
+---
+
+## Measured Performance
+
+Numbers, because vibes aren't proof. Captured under real concurrent load: **50 agents across 5 tenants, background REST traffic, and live WebSocket viewers, all running at the same time** — not the gateway tested in isolation.
+
+### Gateway overhead (the actual metric the 300ms budget targets)
+
+This is the platform's own processing time — resolved identity → permission → validation → rate limit → dispatch — measured *before* the downstream tool call, per the architecture's own audit instrumentation:
+
+| Percentile | Time | Budget | Headroom |
+|---|---|---|---|
+| p50 | 29ms | — | — |
+| **p95** | **45ms** | **300ms** | **~85% under budget** |
+| p99 | 46ms | — | — |
+| max | 46ms | — | — |
+
+### Per-route latency, full run (3,500+ MCP calls in the burst)
+
+| Route | Requests | Avg | p50 | p95 | Max |
+|---|---|---|---|---|---|
+| `POST /mcp` | 3,500 | 102ms | 100ms | 136ms | 297ms |
+| `GET /api/agents` | 259 | 26ms | 20ms | 61ms | 124ms |
+| `GET /api/tools` | 259 | 26ms | 20ms | 62ms | 118ms |
+| `POST /auth/login` | 10 | 67ms | 61ms | 116ms | 116ms |
+| `POST /auth/register-tenant` | 10 | 82ms | 69ms | 175ms | 175ms |
+| `GET /auth/verify-email` | 10 | 5ms | 5ms | 11ms | 11ms |
+| `POST /api/observability/ticket` | 5 | 18ms | 23ms | 23ms | 23ms |
+| `GET /healthcheck` | 1 | 2ms | 2ms | 2ms | 2ms |
+
+> The `/mcp` route's raw latency (~100ms) is noticeably higher than the gateway-overhead figure above (~29ms) — that gap isn't platform slop, it's the real network round trip against the test tool's target (a deliberately-blocked address, verified via the SSRF layer above) plus HTTP overhead outside the gateway's own control. The gateway-overhead metric isolates specifically the part this project is actually responsible for, which is the number that matters against the PRD budget.
+
+Also confirmed in the same run: **zero session/registry corruption** across the full burst, Redis connections landed at exactly the predicted 5-per-replica formula, and every advisory health subsystem reported clean afterward.
+
+---
+
+## The Load Test Caught a Real Bug
+
+The load test's actual value wasn't the latency numbers — it was catching a real **correctness** bug wearing a performance costume.
+
+With the Postgres main pool undersized, connection queueing under real concurrent load stretched a call burst's wall-clock duration long enough that some of an agent's deliberately-over-limit calls landed in a **fresh** rate-limit window instead of the one they were supposed to be denied in. The rate limiter was silently over-admitting requests — not slow, *wrong*. 65 calls succeeded where exactly 59 should have. No unit test would have ever caught this; it only showed up under genuine concurrency.
+
+The fix was to raise the pool size based on *measured saturation*, not a guessed round number — and the sizing tool's own naive heuristic (which reasoned from the configured ceiling, not what actually happened) got explicitly overridden once the real data disagreed with it.
+
+Separately, two rounds of AI-assisted "fixes" proposed for the *symptom* (a test-teardown FK-violation flood that looked adjacent to this) were traced and rejected — one would have silently disabled SSRF protection for the entire test suite via an environment carve-out; the other pre-emptively jumped the pool to an arbitrary `150`, defeating the entire point of measuring anything. The real root cause was a test harness racing its own async cleanup against itself — nothing wrong with production code at all, which is its own useful lesson about not trusting the first plausible-sounding diagnosis.
+
+---
+
+## Protocol Contracts
+
+A closed, documented vocabulary on both wire protocols — nothing silently falls through to a generic, unhelpful code.
+
+**JSON-RPC (`POST /mcp`)**
+
+| Code | Meaning | Code | Meaning |
+|---|---|---|---|
+| `-32700`…`-32603` | Standard JSON-RPC (parse / invalid-request / method / params / internal) | `-32006` | Payload Too Large |
+| `-32000` | Permission Denied | `-32007` | Unsupported Media Type |
+| `-32001` | Rate Limited | `-32008` | SSRF Blocked |
+| `-32002` | **Service Degraded** — the code carrying the whole thesis above | `-32009` | Identity Invalid |
+| `-32003` | Tool Not Found | `-32010` | Message Rate Limited |
+| `-32004` | Tool Execution Error | `-32011` | Unsupported Protocol Version |
+| `-32005` | Tool Execution Timeout | `-32012` | Origin Not Allowed |
+
+**WebSocket (`/observability/stream`)**
+
+| Code | Meaning | Code | Meaning |
+|---|---|---|---|
+| `1000` | Normal closure | `4002` | Origin Not Allowed |
+| `1001` | Going away (server shutdown) | `4003` | Connection Ceiling Exceeded |
+| `1008` | Policy violation (backpressure) | `4004` | Heartbeat Timeout |
+| `4001` | Ticket Invalid | `4005` | Service Degraded |
+| — | | `4006` | Too Many Connection Attempts |
+
+---
+
+## Tech Stack
+
+**Runtime & framework:** Node.js 22 · TypeScript (strict — `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`) · Fastify
+
+**Data layer:** PostgreSQL 16 · Prisma + `@prisma/adapter-pg` · Redis (ioredis) · BullMQ
+
+**Security & crypto:** Argon2 · AES-256-GCM · HKDF · HMAC-SHA256
+
+**Validation:** Zod · AJV (JSON Schema, with an LRU-bounded compiled-validator cache)
+
+**Testing:** Vitest, real-infrastructure integration tests (no mocked Postgres/Redis for anything load-bearing), whole-system chaos injection, concurrency load testing
+
+**Deployment:** Docker (multi-stage, non-root runtime), Railway, GitHub Actions CI
+
+---
+
+## Project Structure
+
+```
+src/
+├── app.ts / server.ts        # Fastify bootstrap, graceful shutdown sequence
+├── config/env.ts              # Zod-validated environment, fail-fast on boot
+├── lib/                       # Crypto, rate limiter, encryption, SSRF layers, audit core
+├── handlers/                  # Tool execution handlers (HTTP / Postgres / WebFetch)
+├── mcp/
+│   ├── auth/                  # Identity resolution + accelerator cache
+│   ├── tools/                 # tools/list, tools/call pipeline + error mapping
+│   ├── cache/                 # Compiled AJV validator cache
+│   └── errors/                # JSON-RPC error taxonomy, single source of truth
+├── observability/              # WS tickets, tenant-channel registry, heartbeat
+├── repositories/               # Tenant-scoped data access, one file per entity
+├── services/                   # Business logic layer
+├── routes/                     # REST + MCP + WS route registration
+├── workers/                    # BullMQ audit + email workers
+└── queue/                      # BullMQ queue definitions, dead-letter routing
+
+prisma/
+└── schema.prisma
+
+Dockerfile                      # Multi-stage: builder → lean non-root runtime
+docker-compose.yml               # Local parity: platform + Postgres + Redis
+.github/workflows/ci.yml          # typecheck → tests → Docker build
+```
+
+---
+
+## Running It Locally
 
 ```bash
-# 1. Start infrastructure (PostgreSQL + Redis)
-make infra/start
+git clone <this-repo>
+cd agentgate
 
-# 2. Install dependencies
-npm install
-
-# 3. Set up environment variables
 cp .env.example .env
-# Edit .env with your values (or use defaults)
+# generate real secrets, don't ship the placeholders:
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
-# 4. Run database migrations
-make db/migrate
-
-# 5. Start development server
-make dev
+docker compose up --build
 ```
 
-### Available Make Commands
+That brings up the platform, Postgres, and Redis as sibling services, runs migrations automatically as an entrypoint step, and exposes the app on `:3000`.
 
 ```bash
-make infra/start     # Start DB + Redis containers
-make infra/stop      # Stop containers (preserves volumes)
-make infra/reset     # Wipe all data and restart
-make db/migrate      # Create + apply Prisma migrations
-make db/studio       # Open Prisma Studio (visual DB inspector)
-make dev             # Start dev server (tsx watch)
-make test            # Run all tests
-make build           # Typecheck + compile TypeScript
+curl localhost:3000/healthcheck
 ```
+
+Should come back `200`. If it doesn't, check that every secret-shaped env var actually got filled in — the app refuses to boot in production mode against a placeholder value or a loopback-targeted connection string, on purpose.
 
 ---
 
-## Environment Variables
+## Take It for a Spin (curl walkthrough)
 
-| Variable                            | Description                                          | Required |
-| ----------------------------------- | ---------------------------------------------------- | -------- |
-| `AGENTGATE_DATABASE_URL`            | PostgreSQL connection string                         | Yes      |
-| `AGENTGATE_REDIS_URL`               | Redis connection string                              | Yes      |
-| `AGENTGATE_JWT_SECRET`              | JWT signing secret (min 32 chars)                    | Yes      |
-| `AGENTGATE_PASSWORD_PEPPER`         | 64-char hex (32 bytes) — argon2 password pepper      | Yes      |
-| `AGENTGATE_API_KEY_PEPPER`          | 64-char hex (32 bytes) — argon2 API key pepper       | Yes      |
-| `AGENTGATE_REFRESH_TOKEN_SECRET`    | 64-char hex (32 bytes) — HMAC key for refresh tokens | Yes      |
-| `AGENTGATE_PLATFORM_ENCRYPTION_KEY` | 64-char hex (32 bytes) — AES-256 master key          | Yes      |
-| `AGENTGATE_NODE_ENV`                | Environment: `development` or `production`           | Yes      |
-| `AGENTGATE_PORT`                    | HTTP listen port (default: 3000)                     | No       |
-| `AGENTGATE_LOG_LEVEL`               | Pino log level: `info`, `debug`, `warn`, `error`     | No       |
+The full core flow, against either your local instance or the [live deployment](https://zoological-sparkle-production.up.railway.app):
+
+```bash
+BASE_URL="https://zoological-sparkle-production.up.railway.app"
+
+# 1. Register a tenant (this really does send you a verification email in production)
+curl -X POST "$BASE_URL/auth/register-tenant" \
+  -H "Content-Type: application/json" \
+  -d '{"tenantName":"Test Co","slug":"test-co","ownerEmail":"you@example.com","password":"SomethingStrong123!"}'
+
+# 2. Verify (check your inbox for the token)
+curl "$BASE_URL/auth/verify-email?token=<TOKEN_FROM_EMAIL>"
+
+# 3. Log in
+curl -X POST "$BASE_URL/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"SomethingStrong123!"}'
+# → { accessToken, refreshToken }
+
+# 4. Register an agent (the API key is shown exactly once — save it)
+curl -X POST "$BASE_URL/api/agents" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" -H "Content-Type: application/json" \
+  -d '{"name":"my-first-agent"}'
+# → { agent: {...}, apiKey: "agk.xxxxx.xxxxx" }
+
+# 5. Register a tool
+curl -X POST "$BASE_URL/api/tools" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" -H "Content-Type: application/json" \
+  -d '{"name":"status-check","handlerType":"web_fetch","handlerConfig":{"handlerType":"web_fetch","url":"https://example.com"},"inputSchema":{"type":"object","properties":{}}}'
+
+# 6. Grant the agent access to it
+curl -X POST "$BASE_URL/api/agents/<AGENT_ID>/permissions" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" -H "Content-Type: application/json" \
+  -d '{"toolId":"<TOOL_ID>"}'
+
+# 7. Call it as the agent — real MCP JSON-RPC, over the actual protocol
+curl -X POST "$BASE_URL/mcp" \
+  -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"status-check"},"_meta":{"protocolVersion":"2026-07-28"}}'
+```
+
+Then open a WebSocket to `wss://<host>/observability/stream?ticket=<TICKET>` (minted via `POST /api/observability/ticket`) and watch that same call land live, in real time, scoped to your tenant only.
+
+---
+
+## What I Deliberately Did Not Build
+
+Every item below was considered and explicitly punted, with a written reason — not quietly forgotten. Knowing what *not* to build yet is also engineering.
+
+| Item | Why it's not in v1 |
+|---|---|
+| Workflow chaining (tool A's output → tool B's input) | Real Phase 3 feature; no MVP consumer justifies the complexity yet |
+| Tool marketplace / templates | Depends on workflow chaining landing first |
+| OAuth / Enterprise-Managed Auth for agents | Agents aren't interactive — API keys are the right model for the problem that exists today |
+| Global per-agent concurrency ceiling | Per-minute rate limiting is judged sufficient for MVP traffic; a clean, additive future change |
+| System-wide Row-Level Security | Application-layer isolation is proven independently at all four surfaces; a scoped RLS pass on the audit path remains a shippable stretch item with a one-flag rollback |
+| `/metrics` (Prometheus) | The health-check subsystems already compute everything it would expose — pure formatting exercise, not new capability |
+| Verification-token expiry | Named and deferred twice already; needs a migration + route changes, correctly scoped as its own piece of work |
+| API versioning scheme | No breaking change has happened yet to force the question |
+| Multi-region / HA database topology | Managed-service HA is assumed at the platform layer, not hand-built — a different, much bigger project |
+
+---
+
+## The 9-Week Build Log
+
+| Week | Focus |
+|---|---|
+| 1 | Multi-tenant bedrock — JWT auth, tenant context middleware, isolation proof |
+| 2 | Agent/tool registries — split API keys, AES-256-GCM + HKDF encryption |
+| 3 | Permission engine, Redis rate limiter, circuit breaker |
+| 4 | Tool execution pipeline, SSRF Layer 2 |
+| 5 | Async audit infrastructure — idempotent, durable, dead-lettered |
+| 6 | The MCP Gateway — including the mid-week transport rebuild |
+| 7 | Live WebSocket observability |
+| 8 | Full-system hardening — chaos engineering, load testing, real email + invites |
+| 9 | Ship it — bug fixes, deployment, this document |
+
+Every one of those weeks has a full daily engineering log behind it — every non-trivial decision written down with the *why*, not just the *what*. That's a big part of the point of this project: not just "can I build it," but "can I reason about it correctly under pressure, and leave a trail."
+
+---
+
+## Engineering Principles I Kept Relearning
+
+1. **Fail-closed on trust, bounded fail-open on availability — and never mix the two up.**
+2. **Layered defense beats a single check, whenever the check can go stale between validation and use.**
+3. **Dedicated resources only when properties genuinely conflict — reuse otherwise.**
+4. **Empirical verification over assumption**, especially for third-party library internals. Confirmed by test, not by reading docs and hoping.
+5. **Never trust a shared/unique key alone across a tenant boundary**, even when a primary key alone would technically work.
+6. **Every `EventEmitter` gets an explicit error listener** — an unguarded error on an idle client throws synchronously and takes the whole process down.
+7. **One named cleanup authority per resource lifecycle** — never two code paths that can both plausibly tear down the same connection.
+8. **Deferred scope is always named, with a reason.** The table above is the living proof of this.
 
 ---
 
 ## License
 
-MIT
+MIT. Do whatever you want with it — just don't blame me if your agent finds a creative new way to SSRF something I haven't thought of yet.
+
+---
+
+### 📬 Get In Touch
+
+Built solo. Currently job hunting for backend / platform / infrastructure engineering roles.
+
+- **LinkedIn:** [https://www.linkedin.com/in/si-alif/](https://www.linkedin.com/in/si-alif/)
+- **GitHub:** [https://github.com/si-Alif](https://github.com/si-Alif)
+- **Email:** [shahrierislamalif@gmail.com](mailto:shahrierislamalif@gmail.com)
+
+
+If you read this far — hi, and thanks. Yes, I actually killed the Postgres container mid-request to see what would happen. It degraded gracefully. I was very relieved.

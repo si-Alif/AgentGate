@@ -1,500 +1,517 @@
-# MCP Agent Infrastructure Platform — Project Blueprint
+# AgentGate — Product Requirements Document (v2.0)
 
-## Purpose of This Document
+**Status:** Authoritative. Replaces the original `PRD.md` in full — that version still describes an HTTP+SSE transport that got deprecated by the actual MCP spec mid-project and no longer exists anywhere in the shipped system. This one describes the thing that's actually running.
 
-This document defines the full scope, phased plan, technical context, and intended outcomes for an MCP-compatible Agent Infrastructure Platform being built as a flagship backend engineering project. It is intended as a reference for system design, architecture decisions, and implementation planning. The reader should use this to produce a complete system design, data model, API surface, and phased execution plan.
-
----
-
-## 1. One-Line Summary
-
-A multi-tenant gateway platform that allows AI agents to securely authenticate, discover, and invoke registered tools against real systems — with enforced permissions, rate limits, audit logging, and real-time observability built in.
+**One-line summary:** A multi-tenant gateway that lets AI agents securely discover and invoke real tools against real systems — with permissions, rate limits, audit logging, and live observability built in, not bolted on.
 
 ---
 
-## 2. The Problem
+## 0. Read This First
 
-When companies build AI agent workflows today, they face a structural problem. Giving an AI agent direct access to internal systems — databases, APIs, Slack, CRMs, internal tools — is dangerous. There is no controlled surface. The agent can call anything, with any parameters, with no audit trail, no rate limit, and no policy enforcement. When something goes wrong, there is no record of what happened.
+If you're skimming (no judgment, we all skim), here's the whole pitch in one table:
 
-The alternative — building custom integration code per agent per system — does not scale. Every new agent needs new integration work. Every new system needs new connectors. Permissions are hardcoded. Audit logs are an afterthought.
+| | |
+|---|---|
+| **What it is** | Infrastructure that sits between AI agents and the internal systems they need to touch, so a company doesn't have to choose between "give the agent root" and "write bespoke glue code per agent per system" |
+| **Build time** | 9 weeks, solo |
+| **Independent trust boundaries** | 3 — agent API key, human JWT, dashboard WebSocket ticket |
+| **Tenant-isolation surfaces independently proven** | 4 — REST, MCP/JSON-RPC, WebSocket, audit-read |
+| **Mid-build protocol pivot survived** | 1 — the MCP spec deprecated the transport this was built on, mid-Week-6, and the fix shipped inside the same week |
+| **Times "infra fault mistaken for policy decision" got caught before it shipped** | 11, across 9 weeks, in 11 different subsystems |
+| **A load test that found a real security bug instead of just a slow number** | 1, and it's a good story (§13) |
+| **Deployed** | Yes. Docker, Railway, CI-gated, actually reachable over the internet |
 
-The core issue is that AI agents are not users. Users authenticate with usernames and passwords, operate through a UI, and are limited by what the UI exposes. Agents authenticate programmatically, can call anything callable, and operate at machine speed. Existing authentication and authorization patterns were not designed for this.
+If you read exactly one more section after this, make it **§8 (Resilience Philosophy)**. It's the closest thing this project has to a thesis, and it's the section that best explains *how* this thing got built, not just *what* got built.
 
-There is currently no standard infrastructure layer that solves this cleanly. Companies either skip it entirely (dangerous) or build it internally (expensive, one-off).
+Everything below is organized so you can jump straight to whatever you actually care about — architecture, security, the pivot story, the numbers, whatever. It doesn't need to be read top to bottom.
 
 ---
 
-## 3. The Solution
+## 1. The Problem
 
-An infrastructure platform that sits between AI agents and the systems they need to interact with.
+Giving an AI agent direct access to internal systems — a database, an internal API, Slack, whatever — is a genuinely bad idea by default. There's no controlled surface. The agent can call anything, with any parameters, at machine speed, with zero audit trail and zero rate limiting. When something inevitably goes sideways, there's no record of what actually happened.
+
+The obvious alternative — hand-rolling integration code per agent per system — doesn't scale either. Every new agent needs new glue. Every new system needs a new connector. Permissions get hardcoded somewhere nobody remembers, and the audit log (if it exists) is an afterthought bolted on in month four.
+
+The actual root issue: **agents aren't users.** A human logs in through a UI that structurally limits what they can even attempt. An agent authenticates programmatically and can call anything callable, as fast as the network allows. The auth/authz patterns companies already have were built for the first case. Nobody had really built the second one — a real infrastructure layer, not a per-project workaround.
+
+## 2. The Solution
+
+A platform that sits in the middle, speaks a standard protocol (MCP) to any conformant agent, and owns every cross-cutting concern — auth, permissions, rate limits, audit, live observability — so the agent only ever needs to know what tools exist and what they do.
 
 ```
-AI Agent (Claude, GPT, Open Source)
-          ↓
-  MCP Protocol (SSE Transport)
-          ↓
-  Platform Gateway
-  ┌───────────────────────┐
-  │  Agent Authentication │
-  │  Tool Discovery       │
-  │  Authorization        │
-  │  Rate Limiting        │
-  │  Audit Logging        │
-  │  Real-time Streaming  │
-  └───────────────────────┘
-          ↓
-  Registered Tools (DB, Slack, API, etc.)
-          ↓
-  External Systems
+AI Agent (Claude, GPT, any MCP-conformant client)
+          │  HTTPS · JSON-RPC 2.0
+          ▼
+   ┌──────────────────────┐
+   │       AgentGate      │
+   │  auth · permissions  │
+   │  rate limits · audit │
+   │  live observability  │
+   └──────────────────────┘
+          │
+          ▼
+   Registered Tools → External Systems (DB, HTTP, webhooks…)
 ```
 
-The platform exposes a standard MCP-compatible interface. Any MCP-compatible AI agent connects to the platform the same way, regardless of the underlying systems. The platform handles all cross-cutting concerns — auth, permissions, rate limits, logging — so the agent only needs to know what tools exist and what they do.
+**What this explicitly is not:** a chatbot, an LLM wrapper, a workflow-automation tool a human clicks through, or a RAG pipeline. It has no opinion about which model is calling it. It's backend infrastructure — the same category as an API gateway, just built for agent-speed traffic instead of human-speed traffic.
 
 ---
 
-## 4. Core Concepts and Terminology
+## 3. Who This Is Actually For
 
-**Tenant** A company or team using the platform. Tenants are fully isolated from each other. Each tenant has its own tool registry, agent registry, permissions, and audit log.
+Four distinct "users," none of whom share a credential type, none of whom can reach another one's data:
 
-**User** A human who manages the platform for a tenant. Users authenticate with email/password + JWT. Users register tools, create agents, set permissions, and view audit logs through the management API or dashboard.
-
-**Agent** An AI agent or automated system that calls tools through the platform. Agents authenticate with API keys. Agents are registered by users. Each agent has a defined set of tools it is permitted to use.
-
-**Tool** A capability registered by a tenant. A tool is a named, typed action that the platform exposes via MCP. Tools can be: a database query, an HTTP call to an internal API, a Slack message, a file read, a search operation, or any callable action. Each tool has a schema (input parameters and return type) and an execution configuration (how the platform calls the underlying system).
-
-**Tool Execution** One invocation of one tool by one agent. Each execution is an atomic, logged event with a unique ID, input parameters, output, timing, status, and attribution to the agent and tool that produced it.
-
-**Permission** A declared allowance: agent X is permitted to call tool Y, optionally under specific conditions (parameter constraints, time windows, call limits).
-
-**Audit Event** An immutable record of every significant action in the system: agent authenticated, tool invoked, permission denied, rate limit hit, tool registered, agent created. Audit events are append-only and never deleted.
-
-**MCP Transport** The platform exposes tools over the MCP protocol using the HTTP + SSE (Server-Sent Events) transport. This is the standard MCP transport for remote servers. Agents connect to the platform endpoint, discover available tools via the MCP tool listing, and invoke them via JSON-RPC 2.0 messages over SSE.
-
----
-
-## 5. Full Product Vision — End State
-
-This section describes the complete product as it would exist after all phases are complete. This is the ultimate target, not the MVP.
-
-### 5.1 Multi-Tenant Management
-
-- Full tenant isolation at the data layer
-- Tenant registration and onboarding flow
-- User roles within a tenant: Owner, Admin, Member
-- Tenant-level settings: rate limit defaults, audit retention period, allowed tool categories
-
-### 5.2 Tool Registry
-
-- CRUD for tools: create, update, deactivate, delete tools
-- Tool schema definition: typed input parameters with validation rules, typed output schema
-- Tool execution configuration: HTTP endpoint, database connection string, built-in handler type
-- Tool versioning: tools can be updated without breaking agents using older versions
-- Tool categories and tagging for discoverability
-- Tool testing endpoint: invoke a tool manually from the dashboard to verify it works before exposing it to agents
-- Tool marketplace: a curated library of pre-built tool templates (Slack, Postgres query, HTTP fetch, GitHub, Notion) that tenants can enable and configure without writing a handler
-
-### 5.3 Agent Registry
-
-- CRUD for agents: register, update, deactivate agents
-- API key generation and rotation (keys are hashed and stored, never retrievable after creation)
-- Agent metadata: name, description, owning user, creation date, last active
-- Agent tool assignment: which tools a given agent is permitted to call
-
-### 5.4 Authorization and Policy Engine
-
-- Permission model: tenant → agent → tool → allowed/denied
-- Parameter-level constraints: an agent can call a Postgres query tool only with read-only queries (enforced by parameter schema validation)
-- Call budget per agent per tool: agent X can call tool Y at most N times per hour
-- Time window restrictions: agent X can only call tool Y during defined time windows
-- Emergency agent suspension: disable an agent immediately, all calls denied until re-enabled
-
-### 5.5 Rate Limiting
-
-- Global rate limit per tenant (total calls per minute across all agents)
-- Per-agent rate limit (calls per minute for a specific agent)
-- Per-tool rate limit (calls per minute against a specific tool)
-- Rate limit headers returned on every tool invocation response
-- Rate limit events logged as audit events
-- Configurable rate limit tiers per tenant plan
-
-### 5.6 Audit Log
-
-- Immutable, append-only record of all significant events
-- Events include: tool invocations (input, output, duration, status), permission denials, rate limit hits, agent authentication, agent creation, tool registration, user actions
-- Full-text search over audit events
-- Filtering by agent, tool, event type, time range, status
-- Export to JSON or CSV
-- Configurable retention period per tenant
-
-### 5.7 MCP-Compatible Gateway
-
-- Full implementation of the MCP server protocol (HTTP + SSE transport)
-- MCP tool discovery endpoint: agents can list all tools they are permitted to call
-- MCP tool invocation: agents invoke tools via JSON-RPC 2.0 over SSE
-- MCP authentication: agent API key passed as Bearer token in Authorization header
-- MCP error responses: standard JSON-RPC error codes plus platform-specific error types
-- Connection management: SSE connection lifecycle, heartbeat, reconnect handling
-
-### 5.8 Real-Time Observability
-
-- WebSocket stream for live tool execution events (for dashboard consumers)
-- Live view: which agents are active, which tools are being called, call success rate
-- Per-agent activity timeline
-- Per-tool call frequency graph
-- Error rate monitoring with alerting (webhook or email notification when error rate exceeds threshold)
-- p50/p95/p99 latency per tool
-
-### 5.9 Built-In Tool Handlers
-
-Pre-built execution handlers that tenants can configure without writing custom code:
-
-- **HTTP Tool**: call any HTTP endpoint with configurable method, headers, body template
-- **PostgreSQL Query Tool**: execute a SQL query against a configured database connection
-- **Slack Tool**: send a message to a configured Slack channel via webhook
-- **Web Fetch Tool**: fetch and return the text content of a public URL
-- **Email Tool**: send a transactional email via SMTP or SendGrid
-
-### 5.10 Workflow Execution (Post-MVP)
-
-- Chain tools into named workflows: tool A output feeds into tool B input
-- Workflow definition via JSON or YAML
-- Parallel tool execution within a workflow
-- Conditional branching: if tool A returns X, run tool B, else run tool C
-- Workflow execution history and replay
-
-### 5.11 SDK and Developer Experience
-
-- TypeScript/Node.js SDK for registering custom tool handlers programmatically
-- OpenAPI spec auto-generated from the management API
-- Postman collection for the management API
-- Getting-started guide with working examples for Claude and open-source MCP agents
-- Self-hosted deployment option via Docker Compose
-
----
-
-## 6. Technology Stack — Decisions and Rationale
-
-|Technology|Choice|Rationale|
+| Persona | What they do | How they authenticate |
 |---|---|---|
-|Language|TypeScript (strict)|Type safety is non-negotiable for a platform other systems consume. Catches protocol contract violations at compile time.|
-|Runtime|Node.js 22 LTS|Async I/O strengths align with gateway use case. MCP ecosystem is JavaScript-first. Existing familiarity.|
-|Framework|Fastify|Better TypeScript support than Express. Built-in schema validation via JSON Schema. Plugin architecture. Measurably better performance for a gateway workload.|
-|Primary Database|PostgreSQL|All core data is relational: tenants, agents, tools, permissions, audit events. Foreign key integrity matters. PostgreSQL's row-level security options suit multi-tenancy.|
-|ORM|Prisma|TypeScript-first. Auto-generated types. Migration management. Readable schema definition file.|
-|Cache and Queue|Redis + BullMQ|Redis for rate limit counters (atomic increments) and short-lived session state. BullMQ for async job processing (audit event writes, webhook deliveries).|
-|Real-Time|SSE (MCP transport) + WebSocket (dashboard)|SSE is the standard MCP HTTP transport. WebSocket is appropriate for the dashboard observability stream where bidirectional is useful.|
-|MCP Protocol|@modelcontextprotocol/sdk|Official SDK. Handles protocol framing, tool discovery, and SSE transport.|
-|Authentication|API Keys (agents) + JWT (users)|Agents are not interactive — API keys are appropriate. Users are interactive — JWT is appropriate. These are different auth models for different consumers.|
-|Testing|Vitest + Supertest|Vitest for unit tests. Supertest for integration tests against the Fastify app.|
-|Deployment|Docker + Railway or Render|Container-based deployment. Environment parity between local and production.|
+| **Tenant Owner / Admin** | Registers the org, invites teammates, registers agents and tools, sets permissions, reads the audit log | Email + password → JWT (access + refresh) |
+| **AI Agent** | Discovers permitted tools, invokes them, gets rate-limited and logged doing it | Long-lived API key (`agk.<keyId>.<secret>`), verified server-side |
+| **Dashboard Viewer** | Watches tool calls, denials, and rate-limit hits happen live | JWT → short-lived, single-use WebSocket ticket |
+| **Platform Operator (me, and eventually whoever runs this)** | Deploys it, watches `/healthcheck`, reads the audit trail when something's weird | Infra-level access, not an app-level role |
+
+Three genuinely separate auth models for three genuinely different threats — not three implementations of the same idea for no reason. More on why in §7.
 
 ---
 
-## 7. MVP — 2 Months
+## 4. Scope
 
-### Goal
+### 4.1 MVP — what's actually shipped and load-bearing
 
-A working, deployed platform that demonstrates the core value proposition end to end. An MCP- compatible AI agent can connect, authenticate, discover tools, invoke them, and every action is logged and rate-limited. Multi-tenancy is functional. A management API exists for all core operations.
+- **Tenant & user management** — registration, email verification (real delivery, not a stub — see §14), JWT auth with refresh, an invitation-based flow for adding teammates to an existing org (no open self-registration into someone else's tenant)
+- **Agent registry** — CRUD, API key issuance shown exactly once, rotation
+- **Tool registry** — CRUD for HTTP / PostgreSQL / public-URL-fetch handler types, tenant-authored JSON Schema for tool arguments, encrypted handler configs
+- **Authorization** — per-`(agent, tool)` permission grants, checked fresh on *every single call*, never cached (§6)
+- **Rate limiting** — Redis-backed, atomic, per-agent, with a circuit breaker that degrades gracefully instead of taking the whole gateway down
+- **The MCP Gateway** — a single, stateless `POST /mcp` endpoint speaking JSON-RPC 2.0 over the current (2026-07-28) MCP spec
+- **Audit log** — append-only, idempotent, durable, queryable, correctly attributed
+- **Live observability** — a ticket-authenticated WebSocket stream showing tool calls, denials, and rate-limit hits as they happen
+- **Management REST API** — full CRUD for everything above, tenant-scoped, JWT-gated
+- **Deployment** — Dockerized, CI-gated, actually live on the public internet with a working health check
 
-### What Is Included in the MVP
+### 4.2 Explicit non-goals (this week's version)
 
-**Tenant and User Management**
+Named on purpose — a scope decision without a written reason is just a gap nobody admits to. Full table with reasoning in §16.
 
-- Tenant registration
-- User registration within a tenant (email + password)
-- Email verification flow (BullMQ-queued email delivery)
-- JWT-based user authentication (access token + refresh token)
-- Basic user roles: Owner and Member
-
-**Agent Management**
-
-- Create, read, update, deactivate agents within a tenant
-- API key generation on agent creation (shown once, stored as hash)
-- API key rotation
-
-**Tool Registry**
-
-- Create, read, update, deactivate tools within a tenant
-- Tool schema definition: name, description, input parameter schema (JSON Schema), output schema
-- Tool execution configuration: HTTP handler or built-in handler type
-
-**Built-In Tool Handlers (MVP — 3 tools)**
-
-- HTTP Tool: configurable URL, method, headers, body template
-- PostgreSQL Query Tool: configurable connection string, parameterized query execution
-- Web Fetch Tool: fetch and return content of a public URL
-
-**Authorization**
-
-- Assign tools to agents: agent X is permitted to call tool Y
-- All tool invocations check permission before execution
-- Permission denied responses are logged and returned as MCP-standard errors
-
-**Rate Limiting**
-
-- Per-agent rate limit: configurable calls per minute, enforced via Redis atomic counter
-- Rate limit exceeded returns standard MCP error response
-- Rate limit events written to audit log
-
-**MCP Gateway**
-
-- MCP-compatible HTTP + SSE endpoint
-- Agent authenticates via API key (Bearer token)
-- MCP tool discovery: agent lists tools it is permitted to call
-- MCP tool invocation: agent calls tool via JSON-RPC 2.0 over SSE
-- Invocation routes to correct handler, enforces permission and rate limit, returns result
-
-**Audit Log**
-
-- Every tool invocation logged: agent ID, tool ID, tenant ID, input params, output, duration, status (success/error/denied), timestamp
-- Every permission denial logged
-- Every rate limit hit logged
-- Read endpoint: list audit events with filtering by agent, tool, status, time range
-
-**Real-Time Execution Stream**
-
-- WebSocket endpoint that streams live tool execution events
-- Authenticated by user JWT
-- Scoped to the requesting user's tenant
-- Emits event on every tool invocation start and completion
-
-**Management REST API**
-
-- Full CRUD for tenants, users, agents, tools, permissions
-- Audit log query endpoint
-- All endpoints behind JWT authentication
-- All endpoints scoped to the requesting user's tenant (strict isolation)
-
-**Deployment**
-
-- Dockerized application
-- PostgreSQL and Redis as external services
-- Environment variable configuration
-- Health check endpoint
-- Deployed to Railway or Render with a live public URL
-- README with setup instructions and working curl examples
-
-### What Is Explicitly Excluded from the MVP
-
-- Workflow chaining (tool A output into tool B)
-- Parameter-level constraints on permissions
-- Time window restrictions on permissions
-- Tool marketplace or pre-built templates
-- SDK
-- Dashboard UI (management is API-only in MVP)
-- Tool versioning
-- Export of audit logs
-- Webhook or email alerting on errors
-- Latency percentile tracking
-- Multiple auth methods beyond API key + JWT
-
-### MVP Success Metrics
-
-- An MCP-compatible agent (e.g., a script using the MCP SDK) can connect to the deployed platform, list tools, and invoke a tool end to end
-- Tool invocations complete with p95 latency under 300ms (excluding the time taken by the underlying system the tool calls)
-- Permission denial is enforced correctly: an agent without permission for a tool receives a standard MCP error response and the denial is in the audit log
-- Rate limiting fires correctly and is reflected in the audit log
-- All data is strictly tenant-isolated: an API key from tenant A cannot see or call anything belonging to tenant B
-- Audit log captures every invocation with correct attribution
+Short version: no workflow chaining, no tool marketplace, no OAuth for agents, no role model beyond Owner/Member, no global concurrency ceiling, no system-wide row-level security, no `/metrics` endpoint, no API versioning, no multi-region HA. Every one of these was considered and deliberately punted, not forgotten.
 
 ---
 
-## 8. Phase 2 — Months 3 and 4
+## 5. System Architecture
 
-### Goal
+### 5.1 The three trust boundaries
 
-Harden the authorization model, improve observability, add two more built-in tool handlers, and introduce the beginning of the developer experience layer.
+Every request enters through exactly one of three independently-authenticated doors. None of them share a credential type, and — this is the part that actually matters — none of them can be used to reach through to another door's data. This isn't assumed; it's proven independently for all four surfaces in §6.
 
-### What Gets Added
+```mermaid
+graph TD
+    subgraph Clients["Three Independent Trust Boundaries"]
+        AGENT["🤖 AI Agent<br/>Bearer agk.&lt;keyId&gt;.&lt;secret&gt;"]
+        HUMAN["👤 Tenant User<br/>JWT — access + refresh"]
+        DASH["📊 Dashboard<br/>WS ticket — single-use, ~30s TTL"]
+    end
 
-**Advanced Authorization**
+    subgraph APP["AgentGate — N replicas, zero session affinity"]
+        MGMT["REST /api/*"]
+        MCP["POST /mcp<br/>stateless JSON-RPC 2.0"]
+        WSR["GET /observability/stream"]
+        HEALTH["GET /healthcheck"]
+    end
 
-- Parameter-level constraints: define allowed parameter values or patterns per agent per tool
-- Call budget: agent X can call tool Y at most N times per hour (enforced via Redis, logged when budget is exhausted)
-- Emergency suspension: disable an agent immediately via API
+    subgraph REDIS["Redis — per replica"]
+        SHARED[("shared client<br/>BullMQ + PUBLISH")]
+        RL[("rate-limiter client<br/>dedicated, fail-fast, circuit breaker")]
+        SUB[("tenant-event subscriber<br/>duplicate() of shared")]
+    end
 
-**Slack Tool** (fourth built-in handler)
+    subgraph PG["PostgreSQL"]
+        MAIN[("main pool")]
+        AUDIT[("audit pool")]
+    end
 
-- Send message to configured Slack channel via incoming webhook
-- Configurable channel, message template with parameter interpolation
+    AGENT -->|"tools/list, tools/call"| MCP --> MAIN
+    HUMAN -->|"CRUD, audit-read, invites"| MGMT --> MAIN
+    DASH -->|"ticket redemption"| WSR --> RL
+    WSR --> SUB
+    MCP -->|"non-blocking enqueue"| SHARED
+    SHARED --> AUDIT
+    SUB -.->|"live event fan-out"| DASH
+```
 
-**Email Tool** (fifth built-in handler)
+**Why three auth models, not one.** Agents aren't interactive — a long-lived, server-hashed API key is correct for them the same way it's correct for Stripe/GitHub/AWS keys. Users are interactive and session-bounded — JWT fits that shape naturally. The dashboard needed a credential a *browser* could carry, and a browser's native `WebSocket` constructor literally cannot attach a custom `Authorization` header from JS. So instead of inventing a fourth pattern from scratch, the WS ticket reuses the exact shape already proven for refresh tokens: short-lived, single-use, server-stored, atomically redeemed. Same primitive, new context — not a new risk.
 
-- Send transactional email via SMTP or SendGrid
-- Configurable recipient, subject template, body template
+### 5.2 `tools/call` — the critical path
 
-**Observability**
+Every module built since week one converges here. This is the request that actually matters.
 
-- p50 / p95 / p99 latency tracking per tool (rolling 1-hour window via Redis sorted set)
-- Error rate per tool (rolling 1-hour window)
-- Latency and error rate exposed via management API
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AG as AI Agent
+    participant GW as POST /mcp
+    participant AUTH as Identity Resolution<br/>(cache-accelerated)
+    participant PERM as Permission Engine
+    participant AJV as Cached Schema Validator
+    participant RL as Rate Limiter
+    participant EXEC as Tool Executor
+    participant AUD as Audit Pipeline (async)
 
-**Audit Log Improvements**
+    AG->>GW: Bearer agk.…, JSON-RPC envelope
+    GW->>AUTH: resolve agent identity
+    alt cache hit (~30s TTL)
+        AUTH-->>GW: identity, zero DB hit
+    else cache miss
+        AUTH->>AUTH: Postgres lookup + Argon2 verify
+        AUTH-->>GW: identity, cache populated
+    end
+    GW->>PERM: checkPermission(agent, tool, tenant)
+    Note over PERM: always fresh — NEVER cached
+    alt denied
+        PERM-->>AG: -32000 PERMISSION_DENIED
+    else granted
+        GW->>AJV: validate arguments (compiled, cached per tool)
+        alt invalid
+            AJV-->>AG: -32602 INVALID_PARAMS
+        else valid
+            GW->>RL: checkRateLimit(agent)
+            alt over limit
+                RL-->>AG: -32001 RATE_LIMITED
+            else within limit
+                GW->>EXEC: executeTool() — decrypt config, dispatch,<br/>SSRF re-check, timeout-bounded
+                EXEC-->>GW: result or structured error
+                GW-->>AG: JSON-RPC response
+                GW-->>AUD: enqueue (non-blocking, fire-and-forget)
+            end
+        end
+    end
+```
 
-- Full-text search over audit events (PostgreSQL full-text index)
-- Export audit events as JSON
+Two ordering decisions that look arbitrary until you think about the threat model for five seconds:
 
-**OpenAPI Specification**
+- **Permission before schema validation.** An agent with zero grant on a tool could otherwise send garbage arguments on purpose and read the validation error back — which leaks the tool's parameter shape (required fields, patterns) to someone who was never authorized to see it via discovery either. Authorization gates *before* anything tool-specific is revealed. No exceptions.
+- **Identity is cached; permission never is.** Argon2 is deliberately slow (100–300ms) — re-verifying it on every single call would blow the entire gateway-overhead budget on identity checking alone. But the whole point of a permission system is that revocation takes effect on the *next* call, not after some cache TTL wanders off. So identity gets a fast, cacheable front door, and permission stays a slow, always-honest wall right behind it. The front door being briefly stale is fine *because* the wall never is.
 
-- Auto-generated OpenAPI spec for the management REST API
-- Postman collection derived from the spec
+### 5.3 The auth-accelerator cache (worth being precise about)
 
-**Testing**
+This is easy to mistake for a session, and it isn't one. A session is a server-issued token the client is handed and must present back. This cache is the inverse: the client presents its **real, full credential** on every single request, exactly like a stateless design requires — the cache only ever short-circuits the *slow verification step* for a credential it's already seen recently. The client has no idea it exists, gets nothing derived from it, and the behavior is bit-for-bit identical whether the cache is warm, cold, or turned off entirely. It only ever affects latency, never correctness.
 
-- Integration test suite covering all core flows: agent auth, tool invocation, permission denial, rate limit enforcement, tenant isolation
-- Tests run in CI on every push
+### 5.4 Dashboard WebSocket — ticket issuance and redemption
 
----
+```mermaid
+sequenceDiagram
+    autonumber
+    participant D as Dashboard (browser)
+    participant T as POST /api/observability/ticket
+    participant R as Redis
+    participant W as GET /observability/stream
 
-## 9. Phase 3 — Months 5 and 6
+    D->>T: Authorization: Bearer <JWT>
+    T->>R: SET ws:ticket:<id> {identity} EX 30
+    T-->>D: { ticket, expiresInSeconds: 30 }
+    D->>W: wss:// upgrade ?ticket=<id>
+    W->>W: Origin check (defense-in-depth)
+    W->>R: GETDEL ws:ticket:<id> — atomic, single-use
+    alt ticket missing / expired / already used
+        R-->>W: nil
+        W-->>D: close 4001 (Ticket Invalid)
+    else valid
+        R-->>W: identity
+        W->>W: per-user connection ceiling check
+        W-->>D: {type:"connected", serverTime, tenantId}
+    end
+```
 
-### Goal
-
-Introduce workflow execution, the tool marketplace concept, and self-hosted deployment option. At this point the platform is a complete, deployable product.
-
-### What Gets Added
-
-**Workflow Execution**
-
-- Workflow definition: ordered list of tool invocations with input/output mapping between steps
-- Workflow stored as a named, versioned entity in the tool registry
-- Workflow invocation via MCP (a workflow appears as a tool to the agent)
-- Sequential execution: each step's output maps to the next step's input
-- Workflow execution record: full history of each step's input, output, status, and duration
-- Failed step handling: configurable abort or continue on step failure
-
-**Tool Marketplace (MVP Version)**
-
-- Curated list of tool templates: Postgres query, HTTP call, Slack, Email, Web Fetch, GitHub issue create, Notion page create
-- Tenant enables a template and provides configuration (connection string, API key, etc.)
-- Template instantiates as a fully configured tool in the tenant's registry
-
-**Self-Hosted Deployment**
-
-- Docker Compose file with platform, PostgreSQL, and Redis
-- Environment variable documentation
-- Migration run on startup
-- Self-hosted setup guide
-
-**SDK (Alpha)**
-
-- TypeScript package for registering a custom tool handler that connects to the platform
-- Custom handlers run on the tenant's infrastructure and receive invocation requests from the platform via webhook
-- SDK handles authentication, schema validation, and response formatting
-
----
-
-## 10. Data Model — Key Entities
-
-The following are the primary entities. The system design phase should produce the full schema including indexes, constraints, and foreign keys.
-
-**tenants** — id, name, slug, plan, settings (rate limit defaults, audit retention), created_at
-
-**users** — id, tenant_id, email, password_hash, role (owner/admin/member), is_verified, created_at
-
-**agents** — id, tenant_id, name, description, api_key_hash, is_active, created_by, created_at, last_active_at
-
-**tools** — id, tenant_id, name, description, category, handler_type (http/postgres/web_fetch/ slack/email/custom), handler_config (encrypted JSON), input_schema (JSON Schema), output_schema (JSON Schema), is_active, created_at, updated_at
-
-**agent_tool_permissions** — id, agent_id, tool_id, tenant_id, parameter_constraints (JSON), call_budget_per_hour, is_active, created_at
-
-**tool_executions** — id, tenant_id, agent_id, tool_id, input_params (JSON), output (JSON), status (success/error/denied/rate_limited), duration_ms, error_message, started_at, completed_at
-
-**audit_events** — id, tenant_id, agent_id (nullable), user_id (nullable), tool_id (nullable), event_type, payload (JSON), created_at
-
-**workflows** (Phase 3) — id, tenant_id, name, definition (JSON), version, is_active, created_at
-
-**workflow_executions** (Phase 3) — id, workflow_id, tenant_id, agent_id, status, steps (JSON array of step results), started_at, completed_at
-
----
-
-## 11. API Surface — Key Groups
-
-The system design phase should expand these into full endpoint definitions.
-
-**Auth** — register tenant, register user, verify email, login, refresh token, logout
-
-**Agents** — CRUD, generate API key, rotate API key, suspend, list tools assigned
-
-**Tools** — CRUD, assign to agent, remove from agent, test invocation, list executions
-
-**MCP Gateway** — SSE connection endpoint (MCP transport), tool discovery, tool invocation (all JSON-RPC 2.0 over SSE, agent API key auth)
-
-**Audit Log** — list events with filters, export, search
-
-**Observability** — live WebSocket stream (user JWT auth), latency stats per tool, error rate per tool
-
-**Workflows** (Phase 3) — CRUD, invoke, list executions, get execution detail
-
-**Marketplace** (Phase 3) — list templates, enable template, configure enabled template
+The JWT itself never touches this surface — only a random, opaque, single-use ticket does, atomically consumed via Redis `GETDEL` so two concurrent redemption attempts can never both win. One genuinely interesting constraint here: a browser's native `WebSocket` API can't read *why* a pre-upgrade connection got rejected — that's a deliberate WHATWG spec choice, meant to stop a malicious page from port-scanning a user's local network via connection-outcome timing. So every rejection path (bad Origin, invalid ticket, too many connections) has to *complete the handshake* and close with a documented application code, instead of failing the HTTP upgrade the "normal" way. Small detail, real design constraint.
 
 ---
 
-## 12. Non-Functional Requirements
+## 6. Multi-Tenant Isolation
 
-**Security**
+Isolation isn't one mechanism wearing four hats — it's proven **independently** at four separate surfaces, because a leak at any one of them is a real incident regardless of how airtight the other three are.
 
-- API keys stored as bcrypt or Argon2 hashes, never in plaintext
-- Tool handler configurations (connection strings, API keys for external services) encrypted at rest using AES-256
-- All tenant data access goes through a tenant context middleware that enforces isolation
-- Rate limit counters use Redis atomic INCR operations to prevent race conditions
-- Audit log is append-only at the application layer (no update or delete endpoints)
+| Surface | Enforcement | What it actually prevents |
+|---|---|---|
+| **REST** | `TenantContext` middleware injects `{tenantId, userId, role}` from the verified JWT; every query filters on it | A request body/param can't override which tenant's data gets touched |
+| **MCP (JSON-RPC)** | Tool-name → ID resolution is `(name, tenantId)`-scoped; permission re-verifies tenant status fresh, every call | Cross-tenant tool-name guessing can't resolve to another tenant's tool |
+| **WebSocket** | Live events fan out only to sockets registered under the *server-resolved* tenant ID from the redeemed ticket — never a client-supplied field | A guessed or stolen channel name can't be joined; delivery is registry-driven, not request-driven |
+| **Audit-read** | Every read filters `tenantId` on *both* sides of any join — never trusts a shared primary key alone | A known, valid event ID under the wrong tenant returns nothing. Not even a 403 that would confirm the record exists. |
 
-**Performance Targets (MVP)**
-
-- Tool invocation gateway overhead (excluding underlying system call): p95 under 300ms
-- Audit event write: async via BullMQ, does not block invocation response
-- Rate limit check: Redis operation, under 5ms
-
-**Observability (Self)**
-
-- Structured JSON logging via pino (built into Fastify)
-- Request ID on every request, propagated to audit events
-- Health check endpoint returning database and Redis connectivity status
+The one thing this project treats as genuinely load-bearing, not just nice-to-have: **`checkPermission()` re-derives tenant scope from the database on every single call, with zero caching**, specifically so a revoked permission or a suspended tenant takes effect on the *very next request* — not after some TTL wanders off. Everything upstream of it (the identity cache, the tool-list cache) is allowed to be briefly stale precisely *because* this one check never is.
 
 ---
 
-## 13. What This Project Demonstrates Professionally
+## 7. Security Architecture
 
-**Platform engineering** — exposing capabilities to other systems, not just end users. This is a different engineering layer from application development.
+### 7.1 SSRF — two independent layers, not one
 
-**Protocol implementation** — implementing MCP (JSON-RPC 2.0 over SSE) correctly requires understanding the protocol contract, not just calling an API.
+A tool that fetches a URL, queries a database, or hits a webhook is configured by the *tenant* — meaning the target is untrusted input pointed at real infrastructure. One check isn't enough, because a hostname can look perfectly safe at tool-creation time and resolve somewhere unsafe by the time it's actually called (DNS rebinding is a real, not theoretical, attack shape here).
 
-**Multi-tenancy design** — strict data isolation, tenant-scoped auth, per-tenant configuration.
+```mermaid
+flowchart LR
+    A["Tool config submitted<br/>(tenant-authored)"] --> B["LAYER 1 — creation time<br/>string-level pre-filter:<br/>scheme allow-list, literal-IP<br/>range classification"]
+    B -->|"accepted, stored"| C["Tool invoked later"]
+    C --> D["LAYER 2 — call time<br/>DNS resolved FRESH,<br/>every candidate IP validated,<br/>connect only to the validated address"]
+    D -->|"blocked"| E["-32008 SSRF_BLOCKED"]
+    D -->|"safe"| F["Request proceeds"]
+```
 
-**Agent-level auth and authorization** — distinguishing agent identity from user identity and building authorization that works at machine speed, not human speed.
+Layer 1 catches the obvious stuff cheaply at write time — literal loopback, cloud metadata IPs, private ranges, including decimal/hex/octal-obfuscated encodings of the same. Layer 2 is the actual boundary: DNS gets re-resolved at the *moment of the call*, every returned candidate address gets validated (a mixed response with one safe and one unsafe IP fails the whole set closed), and the connection goes straight to the validated address — nothing downstream is ever allowed to re-resolve the hostname and reopen the window.
 
-**Async job processing** — BullMQ queues for non-blocking audit writes and email delivery.
+### 7.2 Encryption at rest
 
-**Real-time streaming** — SSE for the MCP transport, WebSocket for the observability stream.
+Tool `handler_config` — which can contain connection strings, API keys, webhook secrets — is encrypted with AES-256-GCM. The key isn't one flat platform-wide secret: each tenant's data is encrypted under a **subkey derived via HKDF** from the master key plus the tenant ID. To be precise about what this does and doesn't buy: it's not a boundary against a *compromised master key* (tenant IDs aren't secret), but it does mean a leak scoped to one request or one tenant's key material doesn't drag every other tenant's secrets down with it. Priced honestly as defense-in-depth, not oversold as a silver bullet.
 
-**Rate limiting under concurrency** — Redis atomic operations for correct behavior under concurrent agent calls.
+### 7.3 Credential handling, in one table
 
-**Security at the infrastructure layer** — encrypted configs, hashed keys, append-only audit, tenant isolation enforced in middleware.
+| Credential | Storage | Notes |
+|---|---|---|
+| User password | Argon2 hash | Deliberately expensive (100–300ms), paid once at login |
+| Agent API key secret | Argon2 hash, keyed lookup via public `keyId` | Split `agk.<keyId>.<secret>` specifically because Argon2 can't be looked up by value |
+| Refresh token | Hashed, single-use rotation | Never logged, never re-shown |
+| Invitation token | HMAC-SHA256 (deterministic, lookup-by-value) | Argon2 was considered and rejected — its random per-hash salt structurally can't serve a "find the row this token belongs to" query |
+| WS ticket | Redis key, atomic `GETDEL` | Scrubbed from structured logs by a dedicated serializer, same discipline as every other secret |
 
-**Measurable outcomes** — the same rigor applied in Summerizer: gateway overhead latency, rate limit accuracy, concurrent agent handling, tool invocation success rates.
+### 7.4 Public-surface abuse resistance
+
+Every endpoint reachable **before** a credential exists — tenant registration, login, invitation acceptance, the MCP coarse pre-auth path, WebSocket connect attempts — carries its own independently-bucketed, IP-keyed rate throttle, all built on one proven Redis primitive instead of a new bespoke mechanism per surface. This isn't decorative: unauthenticated tenant-creation spam and unthrottled credential stuffing are both real, boring, entirely preventable attacks against exactly these routes.
 
 ---
 
-## 14. What This Is Not
+## 8. Resilience Philosophy: "An Infra Fault Is Not a Policy Decision"
 
-This is not a chatbot. This is not an LLM wrapper. This is not a workflow automation tool like n8n that end users operate through a UI. This is not a RAG pipeline (Summerizer already covers that).
+If this document has a thesis, this is it, so it gets its own section instead of a bullet point.
 
-This is backend infrastructure — a controlled, observable, permissioned service layer that AI agents consume the same way applications consume an API gateway. The AI aspect is in the consumers of the platform, not in the platform itself. The platform has no opinions about what model is calling it.
+A rate limit being hit, a permission being denied, and a database connection dropping mid-query are three *completely different things*, and treating any two of them the same is a real bug, not a cosmetic one. If a Redis blip gets reported to a client as "you're rate-limited," or a severed Postgres connection gets reported as "your tool's config is broken," the client draws exactly the wrong conclusion and takes exactly the wrong corrective action — retrying a thing that was never actually wrong, or giving up on a thing that was never actually broken.
+
+This distinction got drawn, independently, **eleven times**, in eleven different subsystems, across nine weeks. That's either a sign of a project with a real architectural spine, or a sign that the same near-miss kept almost happening. Both are true, and honestly, that's kind of the point — a principle that only has to be stated once and never revisited again probably wasn't load-bearing to begin with.
+
+| # | Subsystem | The fault | The correct outcome |
+|---|---|---|---|
+| 1 | Permission engine | Postgres error during a grant lookup | Distinct `reason: "error"`, never confused with a real denial |
+| 2 | Rate limiter | Circuit breaker open / Redis unreachable | `degraded: true`, distinct from an actual limit hit |
+| 3 | MCP error mapping | Formalized #1 and #2 into wire-level codes | `-32002 SERVICE_DEGRADED` vs. `-32001` / `-32000` |
+| 4 | Audit layer | A degraded rate-limit result | Never written to the audit trail as a real policy denial |
+| 5 | Ticket issuance | Redis write failure right after a passed rate check | Real `503`, never a fabricated `200` with a dead ticket |
+| 6 | Ticket redemption | `GETDEL` throwing vs. legitimately returning nil | A distinct close code, never conflated with "ticket doesn't exist" |
+| 7 | Audit-read throttle | A shipped bug where the result was never even checked | Fixed to actually branch: `503` vs `429` |
+| 8 | Public-auth throttle | Same split, applied pre-credential | `503` vs `429` — no audit row, since no tenant scope exists yet |
+| 9 | Load-test tallying | The test's own measurement needed the same rigor | Three-bucket tally, never collapsed into two |
+| 10 | Tool executor | Postgres fault during its own defense-in-depth re-lookup | New `INFRA_UNAVAILABLE` code → `-32002` |
+| 11 | Identity resolution | The one unguarded DB call an earlier fix didn't reach | Same pattern, applied one layer earlier |
+
+### 8.1 The hybrid circuit breaker
+
+Rate-limit checks specifically need a **bounded fail-open, then fail-closed** posture — not the always-fail-closed posture the permission engine uses — because a rate limit is a *policy*, not an identity check, and a total outage should degrade throughput protection gracefully rather than take the whole gateway down with it.
+
+- **CLOSED** (healthy) — normal atomic checking.
+- **OPEN** (tripped, 3 consecutive failures) — fails closed immediately, doesn't even attempt Redis, for a cooldown window.
+- **HALF_OPEN** (probing) — one call let through after cooldown; success resets to CLOSED, failure re-trips OPEN.
+
+Two known imprecisions here are **documented exactly**, not glossed over: the fail-open window is bounded by *time*, not exact call count (concurrency makes "the first N calls" an undefined concept), and concurrent `HALF_OPEN` probes resolve last-writer-wins. Stating a real limitation precisely beats implying a stronger guarantee that doesn't actually hold.
 
 ---
 
-## 15. Intended Reader of This Document
+## 9. Data Model (the shape, not the DDL)
 
-A system design AI or architect should use this document to produce:
+```mermaid
+erDiagram
+    TENANT ||--o{ USER : "has"
+    TENANT ||--o{ AGENT : "owns"
+    TENANT ||--o{ TOOL : "registers"
+    TENANT ||--o{ INVITATION : "issues"
+    TENANT ||--o{ AUDIT_EVENT : "scopes"
+    AGENT ||--o{ AGENT_TOOL_PERMISSION : "granted"
+    TOOL ||--o{ AGENT_TOOL_PERMISSION : "grantable"
+    AGENT ||--o{ TOOL_EXECUTION : "invokes"
+    TOOL ||--o{ TOOL_EXECUTION : "invoked-as"
+    TOOL_EXECUTION ||--|| AUDIT_EVENT : "shares one client-generated ID"
+    USER ||--o{ INVITATION : "sends"
+```
 
-1. Complete PostgreSQL schema with all tables, indexes, constraints, and foreign keys
-2. Full API specification for all endpoint groups (method, path, auth, request body, response body, error responses)
-3. MCP gateway implementation plan (SSE connection lifecycle, JSON-RPC message handling, tool discovery protocol, invocation protocol)
-4. Rate limiting implementation detail (Redis data structures, key naming, atomic operations, expiry strategy)
-5. Multi-tenancy enforcement strategy (middleware design, query-level filtering, encryption approach for handler configs)
-6. BullMQ queue design (queues, workers, retry strategy, dead letter handling)
-7. WebSocket observability stream design (connection management, event schema, backpressure)
-8. Phased implementation order within the MVP: what to build first given dependencies between components
-9. Testing strategy: unit test targets, integration test scenarios, test data management
-10. Deployment architecture: Docker setup, environment variables, migration strategy, health checks
+Three decisions worth flagging, because none of them are the "obvious" choice:
+
+- **Deactivation is always soft, never a hard delete.** Agents and tools get `isActive: false`, never removed. A hard delete would either cascade-destroy audit history or get blocked by a foreign key and fail confusingly the first time it actually mattered.
+- **Audit tables are append-only by construction.** No UPDATE or DELETE route exists for `tool_executions` or `audit_events`, at *any* layer. Enforced by the absence of the code path — not a database trigger someone could forget to add.
+- **`tool_executions` and `audit_events` share one client-generated UUID as their primary key.** Minted once at the point of invocation, threaded into both tables inside one transaction. This one detail is what makes the whole audit pipeline idempotent under BullMQ's at-least-once delivery — a redelivered job hits the same primary key, the write no-ops, and nothing ever duplicates.
+
+---
+
+## 10. Async & Real-Time Infrastructure
+
+### 10.1 Why three Redis connections, not one
+
+| Client | Tuning | Why it can't share a connection |
+|---|---|---|
+| `redis` (shared) | `maxRetriesPerRequest: null` | BullMQ needs infinite retry on its own internal blocking reads |
+| `rateLimiterRedis` (dedicated) | fail-fast, short timeout, owns the circuit breaker | Directly contradicts the shared client's settings — a rate check needs to fail *fast*, not retry forever |
+| `tenantEventSubscriber` (duplicated) | inherits the shared client's settings | Once a connection issues `SUBSCRIBE`, Redis restricts it to pub/sub commands only — structurally can't double as a general-purpose client |
+
+**Total per replica: 5 connections** — the three above, plus one BullMQ-internal blocking-read duplicate each for the audit worker and the email worker. This started as a stated hypothesis and got **empirically confirmed**, not assumed, once the full system ran together for the first time.
+
+### 10.2 The BullMQ pattern, applied twice
+
+Both the audit pipeline and the email pipeline follow the identical shape: enqueue fire-and-forget (never awaited, never throws back to the caller), a worker with a real retry/backoff schedule, and — the part that actually matters — **failures classified before they're retried.** A permanent failure (malformed payload, rejected recipient) dead-letters on the first attempt, zero retries burned. A transient failure (network blip, a 5xx) gets the full backoff schedule and only dead-letters once genuinely exhausted. Retrying a permanent failure three times just delays an inevitable dead-letter for no reason.
+
+### 10.3 WebSocket fan-out — reference-counted, not per-connection
+
+The dashboard doesn't give every connected socket its own Redis subscription — that doesn't scale past a handful of viewers. One dedicated subscriber connection per replica backs an in-process, reference-counted `Map<tenantId, Set<WebSocket>>`: the *first* viewer for a tenant triggers a real `SUBSCRIBE`, every following viewer just joins the existing set, and the *last* one leaving triggers the matching `UNSUBSCRIBE`. Delivery is registry-driven — a tenant with zero current viewers never has its events even parsed locally, let alone delivered.
+
+---
+
+## 11. Protocol Contracts
+
+A closed, documented vocabulary on both wire protocols — nothing is allowed to silently fall through to a generic, unhelpful code.
+
+**JSON-RPC (`POST /mcp`)**
+
+| Code | Meaning | Code | Meaning |
+|---|---|---|---|
+| `-32700`…`-32603` | Standard JSON-RPC (parse/invalid-request/method/params/internal) | `-32006` | Payload Too Large |
+| `-32000` | Permission Denied | `-32007` | Unsupported Media Type |
+| `-32001` | Rate Limited | `-32008` | SSRF Blocked |
+| `-32002` | **Service Degraded** — the code carrying §8's whole principle | `-32009` | Identity Invalid |
+| `-32003` | Tool Not Found | `-32010` | Message Rate Limited |
+| `-32004` | Tool Execution Error | `-32011` | Unsupported Protocol Version |
+| `-32005` | Tool Execution Timeout | `-32012` | Origin Not Allowed |
+
+**WebSocket (`/observability/stream`)**
+
+| Code | Meaning | Code | Meaning |
+|---|---|---|---|
+| `1000` | Normal closure | `4002` | Origin Not Allowed |
+| `1001` | Going away (server shutdown) | `4003` | Connection Ceiling Exceeded |
+| `1008` | Policy violation (backpressure) | `4004` | Heartbeat Timeout |
+| `4001` | Ticket Invalid | `4005` | Service Degraded |
+| — | | `4006` | Too Many Connection Attempts |
+
+---
+
+## 12. Non-Functional Requirements & Measured Performance
+
+| Requirement | Target | Measured |
+|---|---|---|
+| Gateway overhead (excluding downstream call time) | p95 < 300ms | p50 ≈ 15–25ms, p95 ≈ 19–45ms — real headroom, under actual concurrent load |
+| Redis connections per replica | 5 (formula, §10.1) | Confirmed at exactly 5, empirically |
+| Session/registry corruption under load | Zero | Zero, across bursts of 3,000+ concurrent requests |
+| Multi-tenant isolation under adversarial pivot | Zero cross-tenant leakage, sequential *and* concurrent | Proven — one attacker persona, all four surfaces, both orderings |
+
+**The load test's real find wasn't a number — it was a bug wearing a performance costume.** With the Postgres main pool undersized, connection queueing under real concurrent load stretched a call burst's wall-clock duration long enough that some of an agent's deliberately-over-limit calls landed in a **fresh** rate-limit window instead of the one they were supposed to be denied in. The rate limiter was silently over-admitting requests — not slow, *wrong*. A unit test would never have caught this; it only showed up under genuine concurrency. The fix was to raise the pool size based on measured saturation, not a guessed round number — and the sizing tool's own naive heuristic (which reasoned from the configured ceiling instead of what actually happened) got explicitly overridden once the real data disagreed with it.
+
+Two rounds of AI-suggested "fixes" for the *symptom* (a test-teardown race that looked like a pool problem) were traced and rejected — one would have silently disabled SSRF protection for the entire test suite via an environment carve-out; the other pre-emptively jumped the pool to an arbitrary number, defeating the entire point of measuring anything. The actual root cause was a test harness racing its own background cleanup against itself. Nothing wrong with production code at all — which is its own useful lesson about not trusting the first plausible-sounding diagnosis.
+
+---
+
+## 13. Deployment & Operations
+
+```mermaid
+graph LR
+    GH["GitHub"] -->|"push"| CI["CI: typecheck →<br/>lint → full-system<br/>harness → Docker build"]
+    CI -->|"merge to main"| IMG["Image, tagged by SHA"]
+    IMG -->|"deploy"| RW["Railway"]
+    subgraph RW["Railway Project"]
+        APP["AgentGate container<br/>non-root, multi-stage build"]
+        PGM["Postgres plugin"]
+        RDM["Redis plugin"]
+    end
+    APP --> PGM
+    APP --> RDM
+```
+
+A few things worth calling out explicitly:
+
+- **Migrations run on boot**, as an entrypoint step, before the server process starts — never a manual, easy-to-forget out-of-band step.
+- **Config safety is a two-layer check.** Zod validates every env var's shape and presence at boot. A second, independent, production-only guard checks that present, correctly-shaped secrets *aren't* known placeholder values or loopback-targeted connection strings, and refuses to boot if they are. Same "shape check vs. safety check" split SSRF Layer 1/Layer 2 already established — reused, not reinvented.
+- **`AGENTGATE_TRUST_PROXY_HOPS` is the setting that's easiest to forget precisely because it does nothing wrong locally.** With no reverse proxy in front of the app, every client's real IP resolves correctly by default. The moment a real edge proxy sits in front of it — which happens the instant this actually deploys — every client silently collapses onto the proxy's own IP unless this is set, which would've merged every real user into one shared rate-limit bucket. Caught and fixed during the actual deploy, not in a design review after the fact — the kind of thing you only find by actually shipping.
+
+---
+
+## 14. The Origin Story — How This Actually Got Built
+
+A résumé line can say "built an MCP gateway." What actually happened is closer to: "built an MCP gateway, the protocol changed underneath it mid-build, and the fix shipped inside the same week." That's a better story, and it's true, so it gets a table.
+
+| Milestone | What shipped | The thing that almost got missed |
+|---|---|---|
+| **M1 — Multi-tenant bedrock** | Tenants, users, JWT, tenant-context middleware, isolation proof | Fastify isn't Express — middleware-as-hooks had to be learned right the first time or every downstream week inherits the bug |
+| **M2 — Registries & crypto** | Agent/tool CRUD, split API keys, AES-256-GCM + HKDF | A naive single-token key design would've needed an O(n) Argon2 sweep just to identify *which* agent — caught before it shipped |
+| **M3 — Guardrails** | Permission engine, Redis rate limiter, circuit breaker | Two Redis clients were needed, not one — conflicting reliability requirements on the same connection |
+| **M4 — Execution pipeline** | HTTP/Postgres/WebFetch handlers, SSRF Layer 2 | Layer 1 alone doesn't stop DNS rebinding |
+| **M5 — Audit pipeline** | Idempotent dual-table writes, dead-letter queue, two redaction passes | A string-pattern redactor silently fails on JSON-quoted secrets — needed a *structural* second pass |
+| **M6 — MCP Gateway** | The gateway itself | **The MCP spec deprecated the transport this was designed against, days before the build started.** Rebuilt from a stateful SSE/session model to stateless Streamable HTTP, inside the same week, with zero backward-incompatible gaps in the error taxonomy. |
+| **M7 — Live observability** | Ticket-auth WebSocket, tenant-scoped fan-out | A browser can't see *why* a pre-upgrade WS connection failed — every rejection has to complete the handshake first, the opposite of normal REST rejection |
+| **M8 — Hardening** | Full-system chaos testing, load testing, real email, invite-based signup | A load test found a genuine correctness bug, not a perf issue (§12) |
+| **W9 — Ship it** | Deploy, docs, this document | A chaos-suite failure traced to the *one* unguarded DB call an earlier fix didn't reach — the 11th instance of §8's pattern |
+
+The pivot is the best "requirements changed mid-flight, here's what I actually did about it" story in the whole build, and it's a genuine one — not a hypothetical asked in an interview, an actual thing that happened and got handled inside a single week.
+
+---
+
+## 15. Success Metrics / Go-Live Gate
+
+| Requirement | Proven by |
+|---|---|
+| MCP-compatible agent connects, lists tools, invokes end to end | Full-system harness |
+| p95 gateway overhead comfortably under budget | Real concurrent-load measurement |
+| Tenant A's credentials can never see/call Tenant B's anything | Adversarial matrix, all four surfaces, sequential + concurrent |
+| Permission denial + rate limiting fire correctly and are audited | Full-system harness |
+| Audit log captures every invocation with correct attribution | Full-system harness |
+| A real user can register, verify, and log in | Real email delivery, end to end |
+| Public endpoints resist unauthenticated abuse | Adversarial matrix |
+| System survives real infra faults (Postgres/Redis/WS/worker) | Whole-system chaos suite — real severed connections, not mocks |
+| Deployed, documented, reproducible from a clean machine | Docker + CI + live URL |
+| Governing docs match the running system | This document |
+
+Every row here checks out against the shipped system, not an aspiration.
+
+---
+
+## 16. Phase 2 Backlog (Deliberately Deferred)
+
+Every item below was considered and explicitly punted with a stated reason — not quietly forgotten. That distinction is itself part of the engineering discipline this project is trying to demonstrate: knowing what *not* to build yet is a skill, not a gap.
+
+| Item | Why it's not in v1 |
+|---|---|
+| Workflow chaining (tool A's output → tool B's input) | Real Phase 3 feature; no MVP consumer justifies the complexity yet |
+| Tool marketplace / templates | Depends on workflow chaining landing first |
+| Role-based access beyond Owner/Member | MVP scope per original design; the `requireRole()` primitive exists and is proven — just not applied project-wide yet |
+| OAuth / Enterprise-Managed Auth | Agents aren't interactive; API keys are the right model for the problem that actually exists today |
+| Global per-agent concurrency ceiling | Per-minute rate limiting is judged sufficient for MVP traffic; a clean, additive future change |
+| System-wide Row-Level Security | Application-layer isolation is proven at all four surfaces independently; a scoped RLS pass on the audit path specifically remains a shippable stretch item with a one-flag rollback |
+| `/metrics` (Prometheus) | The health-check subsystems already compute everything it would expose — pure formatting exercise, not new capability |
+| Verification-token expiry | Named and deferred twice already (email + invitations); needs a migration and route changes, correctly scoped as its own piece of work |
+| API versioning scheme | No breaking change has happened yet to force the question |
+| Multi-region / HA database topology | Managed-service HA is assumed at the platform layer, not built by hand — a genuinely different, much bigger project |
+
+---
+
+## 17. Engineering Principles (the reusable takeaways)
+
+Stated as principles because they recurred often enough, independently, that leaving them implicit in the code would've undersold them:
+
+1. **Fail-closed on trust, bounded fail-open on availability — and never mix the two up.** (§8)
+2. **Layered defense beats a single check, whenever the check can go stale between validation and use.** (SSRF, §7.1)
+3. **Dedicated resources only when properties genuinely conflict — reuse otherwise.** (Redis clients, §10.1)
+4. **Empirical verification over assumption**, especially for third-party library internals — confirmed by test, not by reading docs and hoping.
+5. **Never trust a shared/unique key alone across a tenant boundary**, even when a primary key alone would technically work.
+6. **Every EventEmitter gets an explicit error listener** — an unguarded error on an idle client throws synchronously and takes the whole process down. Checked as a matter of course, not an afterthought.
+7. **One named cleanup authority per resource lifecycle** — never two code paths that can both plausibly tear down the same connection.
+8. **Deferred scope is always named, with a reason.** (§16 is the living proof.)
+
+---
+
+## 18. Appendix
+
+### 18.1 Glossary
+
+- **MCP** — Model Context Protocol, the open standard this platform speaks to AI agents.
+- **JSON-RPC 2.0** — The request/response envelope MCP uses over HTTP.
+- **SSRF** — Server-Side Request Forgery; tricking a server into requesting something it shouldn't (e.g. internal infra).
+- **HKDF** — HMAC-based Key Derivation Function; turns one master key into many distinct, context-bound subkeys.
+- **Dead-letter queue** — Where a job goes once it's genuinely exhausted its retries, so it can be inspected instead of silently vanishing.
+- **Idempotent** — Doing the same operation twice produces the same result as doing it once. Load-bearing property of the audit pipeline under at-least-once delivery.
+
+### 18.2 Tech Stack
+
+Node.js 22 · TypeScript (strict) · Fastify · PostgreSQL · Prisma · Redis (ioredis) · BullMQ · Zod · AJV (JSON Schema) · Argon2 · Docker · Railway · GitHub Actions.
+
+### 18.3 Document History
+
+This is v2.0 — a full rewrite reflecting the shipped system, not the plan the system started from. v1.0 described the original HTTP+SSE transport and is fully retired; if you find a stray reference to a `Session Map` or `GET /mcp/sse` anywhere else in this repo, that's a documentation bug, not an alternate architecture — it should get filed and fixed, same as any other bug.
